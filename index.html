@@ -4,7 +4,6 @@
     <meta charset="utf-8">
     <title>Boletas de Rifa</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=overlays-content">
-    <!-- evita 404 del favicon -->
     <link rel="icon" href="data:,">
     <style>
 :root{--bg:#129a3a;--bg-deep:#0e7f30;--ink:#ffffff;--muted:#e5ffe8;--a1:#00ffa9;--a2:#3db7ff;--a3:#ffb24d;--header-h:90px}
@@ -37,6 +36,8 @@ header div{display:flex;align-items:center;gap:12px}
 .ok{background:linear-gradient(90deg,var(--a1),#a9ffdf);color:#062017}
 .no{background:linear-gradient(90deg,#ff6b6b,#ffd0d0);color:#1a0606}
 @media(max-width:768px){header{flex-direction:column;gap:8px;padding:12px 10px}.search{width:92vw;max-width:92vw}.wrap{gap:10px;margin-top:12px}}
+/* debug */
+#debug{position:fixed;right:8px;bottom:8px;max-width:96vw;background:rgba(0,0,0,.6);color:#fff;padding:10px 12px;border-radius:12px;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;z-index:9999;white-space:pre-wrap;display:none}
     </style>
   </head>
   <body>
@@ -67,22 +68,33 @@ header div{display:flex;align-items:center;gap:12px}
       </div>
     </div>
 
+    <div id="debug"></div>
+
     <script>
-/* === PROXY (tu Worker de Cloudflare) === */
+/* === PROXY (tu Worker) === */
 const PROXY = "https://csv-proxy.jeisendigital.workers.dev";
 
-/* === URLs de tus hojas publicadas (vía proxy) === */
+/* === URLs de hojas publicadas (vía proxy) === */
 const CSV_URL_RAFFLES = PROXY + "?u=" + encodeURIComponent("https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv");
 const CSV_URL_CONFIG  = PROXY + "?u=" + encodeURIComponent("https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=856149436&single=true&output=csv");
 
-/* Fallback de WhatsApp si Config no trae teléfono */
 const DEFAULT_WA_PHONE = "+573206413635";
 
-/* ===== utilidades de red ===== */
-function bust(u){return u+(u.includes("?")?"&":"?")+"t="+Date.now()}
-async function getCSV(url){const r=await fetch(bust(url),{cache:"no-store",credentials:"omit"});return await r.text()}
+/* ===== debug ===== */
+const DEBUG = new URL(location.href).searchParams.get('debug') === '1';
+const $dbg = document.getElementById('debug');
+function dbg(...args){ if(!DEBUG) return; $dbg.style.display='block'; $dbg.textContent += args.map(x => typeof x==='string'?x:JSON.stringify(x)).join(' ') + "\n"; }
 
-/* ===== detectar separador y parsear (CSV o TSV) con comillas/saltos ===== */
+/* ===== red ===== */
+function bust(u){return u+(u.includes("?")?"&":"?")+"t="+Date.now()}
+async function getText(url){
+  const r = await fetch(bust(url), {cache:"no-store", credentials:"omit"});
+  const txt = await r.text();
+  return txt;
+}
+
+/* ===== CSV/TSV parser ===== */
+function looksLikeHTML(s){ return /^\s*</.test(s||''); } // muy simple pero efectivo
 function detectDelimiter(raw){
   const lines = raw.split(/\r?\n/).filter(l => l.trim()!=="");
   if (!lines.length) return ",";
@@ -93,7 +105,7 @@ function detectDelimiter(raw){
 }
 function parseDelimited(raw, delim){
   if (!raw) return [];
-  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1); // BOM
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
   const rows=[]; let row=[], field='', inQ=false;
   for (let i=0;i<raw.length;i++){
     const c=raw[i], n=raw[i+1];
@@ -113,42 +125,51 @@ function parseDelimited(raw, delim){
 
 /* ===== helpers ===== */
 function norm(s){return (s||'').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
-
-// Normaliza estados de la columna "Estado" (muy tolerante)
 function normalizeState(sRaw){
   if (sRaw == null) return 'ocupado';
   let s = String(sRaw)
-    .replace(/\u00A0/g, ' ')                              // NBSP
-    .replace(/[\u2000-\u200D\u202F\u205F\u3000]/g, ' ')   // otros espacios invisibles
+    .replace(/\u00A0/g, ' ')
+    .replace(/[\u2000-\u200D\u202F\u205F\u3000]/g, ' ')
     .trim()
     .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')      // sin acentos
-    .replace(/[–—\-_:;.,]+/g,' ')                         // guiones/puntuación
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[–—\-_:;.,]+/g,' ')
     .replace(/\s+/g,' ')
     .trim();
-
-  // Si contiene "libre" / "disponible" / "free" / "vacante" en cualquier parte => libre
-  if (/\blibre\b/.test(s) || /\bdisponible\b/.test(s) || /\bfree\b/.test(s) || /\bvacante\b/.test(s)) {
-    return 'libre';
-  }
-  // Todo lo demás => ocupado (asignado, reservado, vendido, pagado, etc.)
+  if (/\blibre\b/.test(s) || /\bdisponible\b/.test(s) || /\bfree\b/.test(s) || /\bvacante\b/.test(s)) return 'libre';
   return 'ocupado';
 }
-
 function findColumnIndexes(headers){
-  // intenta ubicar columna de número y estado por nombre
   let numIdx=-1, stIdx=-1;
   for (let i=0;i<headers.length;i++){
     const h = norm(headers[i]);
-    if (numIdx===-1 && /(numero|n[úu]mero|boleta|ticket|num)/.test(h)) numIdx=i;
+    if (numIdx===-1 && /(numero|n[úu]mero|boleta|ticket|num|#)/.test(h)) numIdx=i;
     if (stIdx===-1 && /(estado|status|disponible|libre|ocupado|asignado|reservado|vendido|pagado)/.test(h)) stIdx=i;
   }
   return { numIdx, stIdx };
 }
+/* plan B: calcula la columna "más numérica" como número y la que más contiene palabras de estado como estado */
+function guessColumns(rows){
+  const cols = Math.max(...rows.map(r=>r.length));
+  let bestNum=-1, bestNumScore=-1, bestState=-1, bestStateScore=-1;
+
+  for(let c=0;c<cols;c++){
+    let numScore=0, stScore=0;
+    for(let i=0;i<Math.min(rows.length,500);i++){
+      const v=(rows[i][c]||'').toString().trim();
+      if (/^\d{1,6}$/.test(v)) numScore++;          // números de 1 a 6 dígitos
+      const n = normalizeState(v);
+      if (n==='libre' || n==='ocupado') stScore++;
+    }
+    if (numScore>bestNumScore){ bestNumScore=numScore; bestNum=c; }
+    if (stScore>bestStateScore){ bestStateScore=stScore; bestState=c; }
+  }
+  return {numIdx:bestNum, stIdx:bestState};
+}
 
 /* ===== estado global ===== */
-let allMap = {};                 // { "0001":"libre"/"ocupado", ... }
-let waPhone = DEFAULT_WA_PHONE;  // teléfono para WhatsApp
+let allMap = {};
+let waPhone = DEFAULT_WA_PHONE;
 
 /* ===== UI ===== */
 function showMsg(t,err){const m=document.getElementById("msg");m.textContent=t||"";m.classList.toggle("error",!!err);m.style.display="block";clearTimeout(showMsg._t);showMsg._t=setTimeout(()=>m.style.display="none",err?2500:1200)}
@@ -156,37 +177,30 @@ function card(num,big){const d=document.createElement("div");d.className="card"+
 function renderGrid(list){const g=document.getElementById("grid");g.innerHTML="";list.forEach(n=>g.appendChild(card(n,false)))}
 function renderSearch(list,exact){const l=document.getElementById("layer");l.style.display="none";l.innerHTML="";if(!list||!list.length)return;list.forEach(n=>l.appendChild(card(n,!!exact)));l.style.display="flex"}
 
-/* ===== Confirmación + WhatsApp ===== */
-function confirmNum(n){
-  const ov=document.getElementById("ov");const b=document.getElementById("box");
-  document.getElementById("q").textContent="¿Quieres separar este número? "+n;
-  ov.style.display="block";b.style.display="block";
-  document.getElementById("yes").onclick=()=>{closeBox();openWA(n)};
-  document.getElementById("no").onclick=closeBox;
-}
+/* ===== confirmación + WhatsApp ===== */
+function confirmNum(n){const ov=document.getElementById("ov");const b=document.getElementById("box");document.getElementById("q").textContent="¿Quieres separar este número? "+n;ov.style.display="block";b.style.display="block";document.getElementById("yes").onclick=()=>{closeBox();openWA(n)};document.getElementById("no").onclick=closeBox}
 function closeBox(){document.getElementById("ov").style.display="none";document.getElementById("box").style.display="none"}
 function normPhone(p){const d=(p||"").replace(/\D/g,"");if(!d) return DEFAULT_WA_PHONE; if(d.startsWith("57")) return "+"+d; if(d.length===10) return "+57"+d; return "+"+d}
 function openWA(n){const msg="Hola, estoy interesado en separar este número: "+n;const url="https://api.whatsapp.com/send?phone="+encodeURIComponent(waPhone)+"&text="+encodeURIComponent(msg);window.open(url,"_blank")}
 
-/* ===== Cargar configuración ===== */
+/* ===== cargar configuración ===== */
 async function loadConfig(){
   try{
-    const raw = await getCSV(CSV_URL_CONFIG);
+    const raw = await getText(CSV_URL_CONFIG);
+    if (looksLikeHTML(raw)){ dbg('CONFIG devolvió HTML (¿no publicado?).'); return; }
     const delim = detectDelimiter(raw);
     const rows = parseDelimited(raw, delim);
-    if (!rows.length) return;
+    dbg('CONFIG filas:', rows.length, 'delim:', delim==='\\t'?'TAB':',');
 
-    // encabezados = primera fila con >=2 valores
-    let h=-1; for (let i=0;i<rows.length;i++){ if(rows[i].filter(x=>(x||'').trim()!=='').length>=2){ h=i; break; } }
+    if (!rows.length) return;
+    let h=-1; for(let i=0;i<rows.length;i++){ if(rows[i].filter(x=>(x||'').trim()!=='').length>=2){ h=i; break; } }
     if (h===-1) return;
     const headers = rows[h].map(x=>(x||'').toString().trim());
-
-    // datos = primera fila con >=1 valor después de h
-    let d=-1; for (let j=h+1;j<rows.length;j++){ if(rows[j].filter(x=>(x||'').trim()!=='').length>=1){ d=j; break; } }
+    let d=-1; for(let j=h+1;j<rows.length;j++){ if(rows[j].filter(x=>(x||'').trim()!=='').length>=1){ d=j; break; } }
     if (d===-1) return;
     const vals = rows[d];
 
-    const cfg={}; for (let k=0;k<headers.length;k++){ const key=headers[k]; if(!key) continue; cfg[key]=(vals[k]||'').toString(); }
+    const cfg={}; for(let k=0;k<headers.length;k++){ const key=headers[k]; if(!key) continue; cfg[key]=(vals[k]||'').toString(); }
 
     const name    = cfg["Nombre_De_La_Rifa"] || cfg["Nombre"] || cfg["Nombre_Comercial"] || "";
     const phone   = cfg["Telefonos"] || cfg["Telefono"] || cfg["Teléfono"] || "";
@@ -202,15 +216,27 @@ async function loadConfig(){
 
   }catch(e){
     showMsg("No se pudo cargar la configuración", true);
+    dbg('CONFIG error:', String(e));
   }
 }
 
-/* ===== Cargar mapa de rifas ===== */
+/* ===== cargar mapa de rifas ===== */
 async function syncMap(){
   try{
-    const raw = await getCSV(CSV_URL_RAFFLES);
+    const raw = await getText(CSV_URL_RAFFLES);
+    if (looksLikeHTML(raw)){
+      dbg('RAFFLES devolvió HTML (probable redirección o no publicado).');
+      renderGrid([]); showMsg("No hay datos de rifas (HTML recibido)", true); return;
+    }
+
+    // conteo rápido de coincidencias "libre" en texto crudo (diagnóstico)
+    const libresEnRaw = (raw.toLowerCase().match(/libre/g) || []).length;
+    dbg('RAW contiene "libre":', libresEnRaw);
+
     const delim = detectDelimiter(raw);
     const rows = parseDelimited(raw, delim);
+    dbg('RAFFLES filas:', rows.length, 'delim:', delim==='\\t'?'TAB':',');
+
     if (!rows.length){ renderGrid([]); showMsg("No hay datos de rifas", true); return; }
 
     // ¿fila de encabezados?
@@ -224,28 +250,39 @@ async function syncMap(){
       if (looksHeader){ headerRowIdx=i; headers=rows[i].map(x=>(x||'').toString()); break; }
     }
 
-    // identifica columnas
-    let numIdx=0, stIdx=1, dataStart=0;
+    let numIdx=0, stIdx=1, dataStart=0, by='default(0,1)';
     if (headerRowIdx !== -1){
       const idxs = findColumnIndexes(headers);
       if (idxs.numIdx !== -1) numIdx = idxs.numIdx;
       if (idxs.stIdx  !== -1) stIdx  = idxs.stIdx;
-      dataStart = headerRowIdx + 1;
+      dataStart = headerRowIdx + 1; by = 'headers';
+    } else {
+      // plan B: heurística por contenido
+      const g = guessColumns(rows.slice(0, Math.min(rows.length, 1000)));
+      if (g.numIdx !== -1) numIdx = g.numIdx;
+      if (g.stIdx  !== -1) stIdx  = g.stIdx;
+      by = 'guess';
     }
+    dbg('Columnas detectadas por', by, ' -> numIdx:', numIdx, 'stIdx:', stIdx, 'dataStart:', dataStart);
 
     const map = {}; const free = [];
+    const sample = [];
     for (let i=dataStart;i<rows.length;i++){
       let num = (rows[i][numIdx]||'').toString().trim();
       let st  = normalizeState(rows[i][stIdx]);
 
       if (!num) continue;
-      num = num.replace(/\D/g,'');      // deja solo dígitos
+      num = num.replace(/\D/g,'');
       if (!num) continue;
-      num = num.padStart(4,'0');        // 4 dígitos
+      num = num.padStart(4,'0');
 
+      if (sample.length < 3) sample.push([rows[i][numIdx], rows[i][stIdx]]);
       map[num] = st;
       if (st === 'libre') free.push(num);
     }
+
+    dbg('Muestra (num, estado):', sample);
+    dbg('Total únicos:', Object.keys(map).length, 'Libres:', free.length);
 
     allMap = map;
 
@@ -255,16 +292,17 @@ async function syncMap(){
       return;
     }
 
-    renderGrid(pickRandom(free, 400));  // muestra hasta 400 aleatorias
+    renderGrid(pickRandom(free, 400));
 
   }catch(e){
     renderGrid([]);
     showMsg("Error de conexión", true);
+    dbg('RAFFLES error:', String(e));
   }
 }
 function pickRandom(arr,n){const a=arr.slice();for(let i=a.length-1;i>0;i++){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,Math.min(n,a.length))}
 
-/* ===== Buscador ===== */
+/* ===== buscador ===== */
 function rerenderSearch(){
   const el=document.getElementById("search");
   const raw=(el.value||"").replace(/\D/g,"").slice(0,4);
@@ -281,7 +319,7 @@ function rerenderSearch(){
   if(allMap[padded]==="libre"){renderSearch([padded],true)}else{showMsg("Boleta ocupada",true)}
 }
 
-/* ===== Init ===== */
+/* ===== init ===== */
 document.addEventListener("DOMContentLoaded",()=>{
   const s=document.getElementById("search");
   s.addEventListener("input",e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);if(e.target.value!==v)e.target.value=v;rerenderSearch()});
@@ -295,7 +333,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 
   loadConfig();
   syncMap();
-  setInterval(syncMap, 5000);  // refresca cada 5s
+  setInterval(syncMap, 5000);
 });
     </script>
   </body>
