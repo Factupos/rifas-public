@@ -94,22 +94,24 @@ header div{display:flex;align-items:center;gap:12px}
 /* ================== CONFIG FUENTES ================== */
 const PROXY = "https://csv-proxy.jeisendigital.workers.dev";
 
-// Numero_De_Rifas publicado
-const URL_TSV_RAFFLES  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=tsv";
-const URL_CSV_RAFFLES  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv";
-const URL_GVIZ_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/gviz/tq?tqx=out:tsv&gid=1661037065";
+// IDs de tu documento y hojas
+const SPREADSHEET_ID = "1MyOkJrGpeY1ZXQVFq_srndALEh6Nzzir8sFSfu-0EVM";
+const GID_RAFFLES    = "1661037065";  // Numero_De_Rifas
+const GID_CONFIG     = "856149436";   // Config_Publica (cámbialo si es otro)
 
-// Config_Publica
-const URL_TSV_CONFIG = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=856149436&single=true&output=tsv";
+// Export directos (más estables que /pub)
+const URL_TSV_RAFFLES  = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=tsv&gid=${GID_RAFFLES}`;
+const URL_CSV_RAFFLES  = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=csv&gid=${GID_RAFFLES}`;
+const URL_GVIZ_RAFFLES = `https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/gviz/tq?tqx=out:tsv&gid=${GID_RAFFLES}`;
+const URL_TSV_CONFIG   = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=tsv&gid=${GID_CONFIG}`;
 
-// Todas vía proxy
+// Siempre a través del Worker
 const CSV_URL_RAFFLES_TSV  = PROXY + "?u=" + encodeURIComponent(URL_TSV_RAFFLES);
-theCSV = CSV_URL_RAFFLES_TSV;
 const CSV_URL_RAFFLES_CSV  = PROXY + "?u=" + encodeURIComponent(URL_CSV_RAFFLES);
 const CSV_URL_RAFFLES_GVIZ = PROXY + "?u=" + encodeURIComponent(URL_GVIZ_RAFFLES);
 const CSV_URL_CONFIG       = PROXY + "?u=" + encodeURIComponent(URL_TSV_CONFIG);
 
-// WhatsApp fallback
+// WhatsApp por defecto (se sobrescribe con la Config si trae teléfonos)
 const DEFAULT_WA_PHONE = "+573206413635";
 
 /* ================== DEBUG ================== */
@@ -274,20 +276,20 @@ async function fetchRafflesRawInOrder() {
   const sources = [CSV_URL_RAFFLES_TSV, CSV_URL_RAFFLES_CSV, CSV_URL_RAFFLES_GVIZ];
   for (const src of sources) {
     const txt = await getText(src);
-    // si el Worker detectó HTML, mandará JSON con ok:false ⇒ lo distinguimos
+    // Si el Worker detectó HTML y devolvió JSON con ok:false
     const trimmed = txt.trim();
     if (trimmed.startsWith('{') && trimmed.includes('"google_returned_html"')) {
       if (DEBUG) dbg('Descartado (HTML detectado por worker):', src);
       continue;
     }
-    // si parece HTML igualmente, descarta
+    // Si parece HTML crudo, descarta
     if (/<!doctype html/i.test(trimmed) || /<html/i.test(trimmed)) {
       if (DEBUG) dbg('Descartado (HTML crudo):', src);
       continue;
     }
     return { raw: txt, src };
   }
-  throw new Error('Todas las fuentes devolvieron HTML/login');
+  throw new Error('Todas las fuentes devolvieron HTML/login o error');
 }
 
 async function syncMap(){
