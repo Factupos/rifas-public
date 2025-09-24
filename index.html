@@ -113,12 +113,28 @@ function parseDelimited(raw, delim){
 
 /* ===== helpers ===== */
 function norm(s){return (s||'').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+
+// Normaliza estados de la columna "Estado" (muy tolerante)
 function normalizeState(sRaw){
-  const s = norm(sRaw);
-  if (s === 'libre' || s === 'disponible' || s === 'free' || s === 'vacante') return 'libre';
-  // todo lo demás = ocupado (Asignado, Ocupado, Reservado, Vendido, Pagado, etc.)
+  if (sRaw == null) return 'ocupado';
+  let s = String(sRaw)
+    .replace(/\u00A0/g, ' ')                              // NBSP
+    .replace(/[\u2000-\u200D\u202F\u205F\u3000]/g, ' ')   // otros espacios invisibles
+    .trim()
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')      // sin acentos
+    .replace(/[–—\-_:;.,]+/g,' ')                         // guiones/puntuación
+    .replace(/\s+/g,' ')
+    .trim();
+
+  // Si contiene "libre" / "disponible" / "free" / "vacante" en cualquier parte => libre
+  if (/\blibre\b/.test(s) || /\bdisponible\b/.test(s) || /\bfree\b/.test(s) || /\bvacante\b/.test(s)) {
+    return 'libre';
+  }
+  // Todo lo demás => ocupado (asignado, reservado, vendido, pagado, etc.)
   return 'ocupado';
 }
+
 function findColumnIndexes(headers){
   // intenta ubicar columna de número y estado por nombre
   let numIdx=-1, stIdx=-1;
@@ -223,9 +239,9 @@ async function syncMap(){
       let st  = normalizeState(rows[i][stIdx]);
 
       if (!num) continue;
-      num = num.replace(/\D/g,'');              // deja solo dígitos
+      num = num.replace(/\D/g,'');      // deja solo dígitos
       if (!num) continue;
-      num = num.padStart(4,'0');                // 4 dígitos
+      num = num.padStart(4,'0');        // 4 dígitos
 
       map[num] = st;
       if (st === 'libre') free.push(num);
@@ -239,7 +255,7 @@ async function syncMap(){
       return;
     }
 
-    renderGrid(pickRandom(free, 400));          // muestra hasta 400 aleatorias
+    renderGrid(pickRandom(free, 400));  // muestra hasta 400 aleatorias
 
   }catch(e){
     renderGrid([]);
