@@ -23,14 +23,14 @@ body{
   overscroll-behavior-y:contain; touch-action:manipulation;
 }
 
+/* CORTINA superior más corta para no tapar números */
 .top-veil{
   position:fixed; left:0; right:0; top:0;
-  height:calc(var(--vv-top) + var(--extra-top) + var(--header-h) + 16px);
+  height:calc(var(--vv-top) + var(--extra-top) + 8px);
   z-index:25; pointer-events:none;
   background:linear-gradient(180deg,
     rgba(14,127,48,.94) 0%,
-    rgba(14,127,48,.88) 40%,
-    rgba(14,127,48,.72) 70%,
+    rgba(14,127,48,.70) 60%,
     rgba(14,127,48,0) 100%);
   -webkit-backdrop-filter:saturate(120%) blur(6px);
   backdrop-filter:saturate(120%) blur(6px);
@@ -39,15 +39,17 @@ body{
 
 header{
   position:fixed; left:0; right:0; z-index:30;
-  top:calc(var(--vv-top) + var(--extra-top));
+  top:0 !important;            /* fija total, sin parpadeos */
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   padding:10px 14px; min-height:90px;
   background:linear-gradient(0deg,rgba(0,0,0,.18),rgba(0,0,0,.18)), var(--bg-deep);
   border-bottom:1px solid rgba(255,255,255,.12);
   box-shadow:0 10px 26px rgba(0,0,0,.35);
+  transform:translateZ(0); -webkit-transform:translateZ(0);
+  backface-visibility:hidden; contain:paint;
 }
-/* --- FIX PARPADEO/MOVIMIENTO ENCABEZADO EN MÓVIL (sin cambiar nada más) --- */
-header{ top:0 !important; transform:translateZ(0); -webkit-transform:translateZ(0); backface-visibility:hidden; contain:paint; }
+/* Asegura que logo y título no queden bajo la barra/“notch” */
+header{ padding-top:calc(10px + env(safe-area-inset-top, 0px)); }
 
 .brand{display:flex;align-items:center;gap:12px}
 .brand img{
@@ -304,7 +306,7 @@ function parseCSV(text){
   }
   push();
   // quita filas vacías
-  return rows.filter(r => r.some(x=>String(x).trim()!=='')); 
+  return rows.filter(r => r.some(x=>String(x).trim()!==''));
 }
 // Toma columnas por encabezado
 function indexByHeader(head, name){
@@ -321,7 +323,7 @@ function confirmNum(n){
   const q   = document.getElementById("q");
 
   if(!ov || !box || !yes || !no || !q){
-    console.warn("Modal: faltan nodos"); 
+    console.warn("Modal: faltan nodos");
     return;
   }
   MODAL_OPEN = true;
@@ -548,7 +550,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
       e.preventDefault();
       SEARCH_INPUT.focus({preventScroll:true});
       setTimeout(()=>{
-        try{ 
+        try{
           var len = SEARCH_INPUT.value.length;
           SEARCH_INPUT.setSelectionRange(len, len);
         }catch(_){}
