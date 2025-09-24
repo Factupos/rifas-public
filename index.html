@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Boletas de Rifa</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=overlays-content">
-    <link rel="icon" href="data:,">
-    <style>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Boletas de Rifa</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=overlays-content">
+  <link rel="icon" href="data:,">
+  <style>
 :root{--bg:#129a3a;--bg-deep:#0e7f30;--ink:#ffffff;--muted:#e5ffe8;--a1:#00ffa9;--a2:#3db7ff;--a3:#ffb24d;--header-h:90px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
@@ -43,94 +43,92 @@ header div{display:flex;align-items:center;gap:12px}
 @media(max-width:768px){header{flex-direction:column;gap:8px;padding:12px 10px}.search{width:92vw;max-width:92vw}.wrap{gap:10px;margin-top:12px}}
 /* debug visible y grande */
 #debug{
-  position: fixed;
-  right: 8px;
-  bottom: 8px;
-  max-width: 96vw;
-  max-height: 60vh;
-  overflow: auto;
-  background: rgba(0,0,0,.85);
-  color: #fff;
-  padding: 12px 14px;
-  border-radius: 12px;
+  position: fixed; right: 8px; bottom: 8px;
+  max-width: 96vw; max-height: 60vh; overflow: auto;
+  background: rgba(0,0,0,.85); color: #fff;
+  padding: 12px 14px; border-radius: 12px;
   font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
-  z-index: 99999;
-  white-space: pre-wrap;
-  display: none;
+  z-index: 99999; white-space: pre-wrap; display: none;
   border: 1px solid rgba(255,255,255,.25);
   box-shadow: 0 8px 30px rgba(0,0,0,.55);
 }
-    </style>
-  </head>
-  <body>
-    <header>
-      <div>
-        <img id="logo" alt="Logo">
-        <h1 id="title"></h1>
-      </div>
-      <input id="search" class="search" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" enterkeyhint="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Buscar # de boleta…">
-      <button id="btnRnd" class="btn">#ALEATORIO</button>
-      <div class="meta">
-        <p id="phone"></p>
-        <p id="addr"></p>
-      </div>
-    </header>
-
-    <div class="legend">
-      <span class="dot free"></span> Libre
-      <span style="width:10px"></span>
-      <span class="dot busy"></span> No libre
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <img id="logo" alt="Logo">
+      <h1 id="title"></h1>
     </div>
-
-    <div id="layer" class="layer"></div>
-    <div id="grid" class="wrap"></div>
-
-    <div id="msg" class="msg"></div>
-
-    <div id="ov" class="ov"></div>
-    <div id="box" class="box">
-      <p id="q"></p>
-      <div class="actions">
-        <button id="yes" class="btn ok">Sí</button>
-        <button id="no" class="btn no">No</button>
-      </div>
+    <input id="search" class="search" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" enterkeyhint="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Buscar # de boleta…">
+    <button id="btnRnd" class="btn">#ALEATORIO</button>
+    <div class="meta">
+      <p id="phone"></p>
+      <p id="addr"></p>
     </div>
+  </header>
 
-    <div id="debug"></div>
+  <div class="legend">
+    <span class="dot free"></span> Libre
+    <span style="width:10px"></span>
+    <span class="dot busy"></span> No libre
+  </div>
 
-    <script>
-/* === PROXY (Cloudflare Worker) === */
+  <div id="layer" class="layer"></div>
+  <div id="grid" class="wrap"></div>
+
+  <div id="msg" class="msg"></div>
+
+  <div id="ov" class="ov"></div>
+  <div id="box" class="box">
+    <p id="q"></p>
+    <div class="actions">
+      <button id="yes" class="btn ok">Sí</button>
+      <button id="no" class="btn no">No</button>
+    </div>
+  </div>
+
+  <div id="debug"></div>
+
+  <script>
+/* ================== CONFIG FUENTES ================== */
 const PROXY = "https://csv-proxy.jeisendigital.workers.dev";
 
-/* === URLs vía proxy (probamos TSV y CSV) === */
-const URL_TSV_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=tsv";
-const URL_CSV_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv";
-const CSV_URL_RAFFLES_TSV = PROXY + "?u=" + encodeURIComponent(URL_TSV_RAFFLES);
-const CSV_URL_RAFFLES_CSV = PROXY + "?u=" + encodeURIComponent(URL_CSV_RAFFLES);
+// Numero_De_Rifas publicado
+const URL_TSV_RAFFLES  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=tsv";
+const URL_CSV_RAFFLES  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv";
+const URL_GVIZ_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/gviz/tq?tqx=out:tsv&gid=1661037065";
 
+// Config_Publica
 const URL_TSV_CONFIG = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=856149436&single=true&output=tsv";
-const CSV_URL_CONFIG = PROXY + "?u=" + encodeURIComponent(URL_TSV_CONFIG);
 
+// Todas vía proxy
+const CSV_URL_RAFFLES_TSV  = PROXY + "?u=" + encodeURIComponent(URL_TSV_RAFFLES);
+theCSV = CSV_URL_RAFFLES_TSV;
+const CSV_URL_RAFFLES_CSV  = PROXY + "?u=" + encodeURIComponent(URL_CSV_RAFFLES);
+const CSV_URL_RAFFLES_GVIZ = PROXY + "?u=" + encodeURIComponent(URL_GVIZ_RAFFLES);
+const CSV_URL_CONFIG       = PROXY + "?u=" + encodeURIComponent(URL_TSV_CONFIG);
+
+// WhatsApp fallback
 const DEFAULT_WA_PHONE = "+573206413635";
 
-/* ===== debug ===== */
+/* ================== DEBUG ================== */
 const DEBUG = new URL(location.href).searchParams.get('debug') === '1';
 const $dbg = document.getElementById('debug');
 function dbg(...args){ if(!DEBUG) return; $dbg.style.display='block'; $dbg.textContent += args.map(x => typeof x==='string'?x:JSON.stringify(x)).join(' ') + "\n"; }
 
-/* ===== net ===== */
+/* ================== NET ================== */
 function bust(u){return u+(u.includes("?")?"&":"?")+"t="+Date.now()}
-async function getText(url){const r=await fetch(bust(url),{cache:"no-store",credentials:"omit"});return await r.text()}
+async function getText(url){
+  const res = await fetch(bust(url), { cache:"no-store", credentials:"omit" });
+  return await res.text();
+}
 
-/* ===== parser smart ===== */
+/* ================== PARSER SMART ================== */
 function parseSmart(raw){
   if (!raw) return {rows:[], delim:',' , name:'empty'};
-
-  // estrategia 1: split rápido por línea + split por delimitador
   const splitLines = (s)=> (s||'').split(/\r\n|\n|\r/);
   const parseFast = (s, d) => splitLines(s).map(line => line.split(d));
-
-  // estrategia 2: parser con comillas, maneja \r sueltos
   function parseQuoted(s, d){
     if (!s) return [];
     if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
@@ -151,8 +149,6 @@ function parseSmart(raw){
     row.push(field); rows.push(row);
     return rows;
   }
-
-  // candidatos: TSV, CSV y punto y coma (;)
   const candidates = [
     {rows: parseFast(raw, '\t'), delim:'\t', name:'fast-TSV'},
     {rows: parseQuoted(raw, '\t'), delim:'\t', name:'quoted-TSV'},
@@ -161,16 +157,11 @@ function parseSmart(raw){
     {rows: parseFast(raw, ';'), delim:';', name:'fast-SCSV'},
     {rows: parseQuoted(raw, ';'), delim:';', name:'quoted-SCSV'},
   ].map(c => {
-    // filtra filas completamente vacías
     c.rows = c.rows.filter(r => Array.isArray(r) && r.some(v => (v??'').toString().trim()!==''));
     return c;
   });
-
-  // elige el que más filas reales produzca
   let best = candidates[0];
   for (const c of candidates) if (c.rows.length > best.rows.length) best = c;
-
-  // fallback: si sólo hay 1 fila pero hay muchos separadores en la primera línea, fuerza split
   if (best.rows.length === 1) {
     const line = raw.split(/\r\n|\n|\r/)[0] || raw;
     const counts = {
@@ -181,16 +172,13 @@ function parseSmart(raw){
     const maxKey = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
     const forceDelim = (maxKey==='tab')?'\t':(maxKey==='semi'?';':',');
     const forced = raw.split(/\r\n|\n|\r/).map(l => l.split(forceDelim)).filter(r => r.some(v => (v??'').toString().trim()!==''));
-    if (forced.length > best.rows.length) {
-      best = {rows: forced, delim: forceDelim, name: 'forced-'+(maxKey.toUpperCase())};
-    }
+    if (forced.length > best.rows.length) best = {rows: forced, delim: forceDelim, name: 'forced-'+(maxKey.toUpperCase())};
   }
-
   dbg('Parser elegido:', best.name, 'filas:', best.rows.length);
   return {rows: best.rows, delim: best.delim, name: best.name};
 }
 
-/* ===== helpers ===== */
+/* ================== HELPERS ================== */
 function norm(s){return (s||'').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 function normalizeState(sRaw){
   if(sRaw==null) return 'ocupado';
@@ -224,11 +212,11 @@ function guessColumns(rows){
   return {numIdx:bestNum,stIdx:bestState};
 }
 
-/* ===== state ===== */
+/* ================== ESTADO ================== */
 let allMap={};
 let waPhone=DEFAULT_WA_PHONE;
 
-/* ===== UI ===== */
+/* ================== UI ================== */
 function showMsg(t,err){const m=document.getElementById("msg");m.textContent=t||"";m.classList.toggle("error",!!err);m.style.display="block";clearTimeout(showMsg._t);showMsg._t=setTimeout(()=>m.style.display="none",err?2500:1200)}
 function card(num,status){
   const d=document.createElement("div");
@@ -240,7 +228,7 @@ function card(num,status){
 function renderGridAll(list){const g=document.getElementById("grid");g.innerHTML="";list.forEach(it=>g.appendChild(card(it.num,it.status)))}
 function renderSearch(list){const l=document.getElementById("layer");l.style.display="none";l.innerHTML="";if(!list||!list.length)return;list.forEach(n=>l.appendChild(card(n,'libre')));l.style.display="flex"}
 
-/* ===== WhatsApp ===== */
+/* ================== WhatsApp ================== */
 function confirmNum(n){
   const ov=document.getElementById("ov");const b=document.getElementById("box");
   document.getElementById("q").textContent="¿Quieres separar este número? "+n;
@@ -252,7 +240,7 @@ function closeBox(){document.getElementById("ov").style.display="none";document.
 function normPhone(p){const d=(p||"").replace(/\D/g,"");if(!d) return DEFAULT_WA_PHONE; if(d.startsWith("57")) return "+"+d; if(d.length===10) return "+57"+d; return "+"+d}
 function openWA(n){const msg="Hola, estoy interesado en separar este número: "+n;const url="https://api.whatsapp.com/send?phone="+encodeURIComponent(waPhone)+"&text="+encodeURIComponent(msg);window.open(url,"_blank")}
 
-/* ===== config ===== */
+/* ================== CONFIG ================== */
 async function loadConfig(){
   try{
     const raw=await getText(CSV_URL_CONFIG);
@@ -281,21 +269,32 @@ async function loadConfig(){
   }catch(e){ showMsg("No se pudo cargar la configuración",true); dbg('CONFIG error:', String(e)); }
 }
 
-/* ===== rifas: lee TODAS las filas ===== */
+/* ================== RIFAS: 3 INTENTOS ================== */
+async function fetchRafflesRawInOrder() {
+  const sources = [CSV_URL_RAFFLES_TSV, CSV_URL_RAFFLES_CSV, CSV_URL_RAFFLES_GVIZ];
+  for (const src of sources) {
+    const txt = await getText(src);
+    // si el Worker detectó HTML, mandará JSON con ok:false ⇒ lo distinguimos
+    const trimmed = txt.trim();
+    if (trimmed.startsWith('{') && trimmed.includes('"google_returned_html"')) {
+      if (DEBUG) dbg('Descartado (HTML detectado por worker):', src);
+      continue;
+    }
+    // si parece HTML igualmente, descarta
+    if (/<!doctype html/i.test(trimmed) || /<html/i.test(trimmed)) {
+      if (DEBUG) dbg('Descartado (HTML crudo):', src);
+      continue;
+    }
+    return { raw: txt, src };
+  }
+  throw new Error('Todas las fuentes devolvieron HTML/login');
+}
+
 async function syncMap(){
   try{
-    // 0) RAW preview cuando debug
-    let raw = await getText(CSV_URL_RAFFLES_TSV);
-    if (DEBUG) { $dbg.style.display='block'; $dbg.textContent='RAW preview (primeros 1500 chars TSV):\n'+raw.slice(0,1500)+'\n---\n'; }
-
-    // 1) parsear TSV; si da pocas filas, intenta CSV y deja que parseSmart elija mejor
+    const { raw, src } = await fetchRafflesRawInOrder();
+    if (DEBUG) { $dbg.style.display='block'; $dbg.textContent='RAW preview ('+src+'):\n'+raw.slice(0,1500)+'\n---\n'; }
     let parsed = parseSmart(raw);
-    if (parsed.rows.length < 3) {
-      dbg('Pocas filas con TSV, probando CSV…');
-      raw = await getText(CSV_URL_RAFFLES_CSV);
-      if (DEBUG) { $dbg.textContent += 'RAW preview (primeros 1500 chars CSV):\n'+raw.slice(0,1500)+'\n---\n'; }
-      parsed = parseSmart(raw);
-    }
     const rows = parsed.rows;
     dbg('RAFFLES filas finales:', rows.length, 'delim:', parsed.delim);
 
@@ -344,17 +343,17 @@ async function syncMap(){
     items.sort((a,b)=>a.num.localeCompare(b.num));
     renderGridAll(items);
 
-    // llena allMap para el buscador
+    // mapa para buscador
     const m={}; items.forEach(it=>m[it.num]=it.status); allMap=m;
 
   }catch(e){
     renderGridAll([]);
-    showMsg("Error de conexión al leer rifas",true);
-    dbg('RAFFLES error:', String(e));
+    showMsg("Error al obtener rifas (intentos agotados)", true);
+    dbg('RAFFLES error final:', String(e));
   }
 }
 
-/* ===== buscador ===== */
+/* ================== BUSCADOR ================== */
 function rerenderSearch(){
   const el=document.getElementById("search");
   const raw=(el.value||"").replace(/\D/g,"").slice(0,4);
@@ -368,7 +367,7 @@ function rerenderSearch(){
   else { showMsg("Número no encontrado",true); }
 }
 
-/* ===== init ===== */
+/* ================== INIT ================== */
 document.addEventListener("DOMContentLoaded",()=>{
   const s=document.getElementById("search");
   s.addEventListener("input",e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);if(e.target.value!==v)e.target.value=v;rerenderSearch()});
@@ -383,6 +382,6 @@ document.addEventListener("DOMContentLoaded",()=>{
   syncMap();
   setInterval(syncMap, 5000);
 });
-    </script>
-  </body>
+  </script>
+</body>
 </html>
