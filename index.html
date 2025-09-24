@@ -41,8 +41,25 @@ header div{display:flex;align-items:center;gap:12px}
 .dot.free{background:#69f0ae}
 .dot.busy{background:#ff8a80}
 @media(max-width:768px){header{flex-direction:column;gap:8px;padding:12px 10px}.search{width:92vw;max-width:92vw}.wrap{gap:10px;margin-top:12px}}
-/* debug */
-#debug{position:fixed;right:8px;bottom:8px;max-width:96vw;background:rgba(0,0,0,.6);color:#fff;padding:10px 12px;border-radius:12px;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;z-index:9999;white-space:pre-wrap;display:none}
+/* debug visible y grande */
+#debug{
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  max-width: 96vw;
+  max-height: 60vh;
+  overflow: auto;
+  background: rgba(0,0,0,.85);
+  color: #fff;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+  z-index: 99999;
+  white-space: pre-wrap;
+  display: none;
+  border: 1px solid rgba(255,255,255,.25);
+  box-shadow: 0 8px 30px rgba(0,0,0,.55);
+}
     </style>
   </head>
   <body>
@@ -85,7 +102,7 @@ header div{display:flex;align-items:center;gap:12px}
 /* === PROXY (Cloudflare Worker) === */
 const PROXY = "https://csv-proxy.jeisendigital.workers.dev";
 
-/* === URLs via proxy (probamos TSV; si falla, CSV) === */
+/* === URLs vía proxy (probamos TSV y CSV) === */
 const URL_TSV_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=tsv";
 const URL_CSV_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv";
 const CSV_URL_RAFFLES_TSV = PROXY + "?u=" + encodeURIComponent(URL_TSV_RAFFLES);
@@ -105,53 +122,72 @@ function dbg(...args){ if(!DEBUG) return; $dbg.style.display='block'; $dbg.textC
 function bust(u){return u+(u.includes("?")?"&":"?")+"t="+Date.now()}
 async function getText(url){const r=await fetch(bust(url),{cache:"no-store",credentials:"omit"});return await r.text()}
 
-/* ===== parsers ===== */
-// 1) split por líneas robusto
-function splitLines(raw){
-  // maneja \r\n, \n o \r
-  return (raw||'').split(/\r\n|\n|\r/);
-}
-// 2) parser seguro con comillas (por si hay comas/tabuladores en campos)
-function parseQuoted(raw, delim){
-  if (!raw) return [];
-  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
-  const rows=[]; let row=[], field='', inQ=false;
-  for (let i=0;i<raw.length;i++){
-    const c=raw[i], n=raw[i+1];
-    if (inQ){
-      if (c==='"'){ if (n==='"'){ field+='"'; i++; } else { inQ=false; } }
-      else field+=c;
-    }else{
-      if (c==='"'){ inQ=true; }
-      else if (c===delim){ row.push(field); field=''; }
-      else if (c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
-      else if (c==='\r'){ /* normaliza CR como fin de línea */ row.push(field); rows.push(row); row=[]; field=''; if (n==='\n'){ i++; } }
-      else field+=c;
-    }
-  }
-  row.push(field); rows.push(row);
-  return rows.filter(r => r.some(v => (v||'').trim()!==''));
-}
-// 3) parser rápido (línea -> split)
-function parseFast(raw, delim){
-  const lines = splitLines(raw);
-  const rows = lines.map(line => line.split(delim));
-  return rows.filter(r => r.some(v => (v||'').trim()!==''));
-}
-// 4) maestro: prueba varias combinaciones y se queda con la que MÁS filas tenga
+/* ===== parser smart ===== */
 function parseSmart(raw){
-  if (!raw) return {rows:[], delim:','};
-  // preferimos TSV primero
+  if (!raw) return {rows:[], delim:',' , name:'empty'};
+
+  // estrategia 1: split rápido por línea + split por delimitador
+  const splitLines = (s)=> (s||'').split(/\r\n|\n|\r/);
+  const parseFast = (s, d) => splitLines(s).map(line => line.split(d));
+
+  // estrategia 2: parser con comillas, maneja \r sueltos
+  function parseQuoted(s, d){
+    if (!s) return [];
+    if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+    const rows=[]; let row=[], field='', inQ=false;
+    for (let i=0;i<s.length;i++){
+      const c=s[i], n=s[i+1];
+      if (inQ){
+        if (c==='"'){ if (n==='"'){ field+='"'; i++; } else { inQ=false; } }
+        else field+=c;
+      }else{
+        if (c==='"'){ inQ=true; }
+        else if (c===d){ row.push(field); field=''; }
+        else if (c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+        else if (c==='\r'){ row.push(field); rows.push(row); row=[]; field=''; if (n==='\n'){ i++; } }
+        else field+=c;
+      }
+    }
+    row.push(field); rows.push(row);
+    return rows;
+  }
+
+  // candidatos: TSV, CSV y punto y coma (;)
   const candidates = [
     {rows: parseFast(raw, '\t'), delim:'\t', name:'fast-TSV'},
     {rows: parseQuoted(raw, '\t'), delim:'\t', name:'quoted-TSV'},
     {rows: parseFast(raw, ','), delim:',', name:'fast-CSV'},
     {rows: parseQuoted(raw, ','), delim:',', name:'quoted-CSV'},
-  ];
+    {rows: parseFast(raw, ';'), delim:';', name:'fast-SCSV'},
+    {rows: parseQuoted(raw, ';'), delim:';', name:'quoted-SCSV'},
+  ].map(c => {
+    // filtra filas completamente vacías
+    c.rows = c.rows.filter(r => Array.isArray(r) && r.some(v => (v??'').toString().trim()!==''));
+    return c;
+  });
+
+  // elige el que más filas reales produzca
   let best = candidates[0];
   for (const c of candidates) if (c.rows.length > best.rows.length) best = c;
+
+  // fallback: si sólo hay 1 fila pero hay muchos separadores en la primera línea, fuerza split
+  if (best.rows.length === 1) {
+    const line = raw.split(/\r\n|\n|\r/)[0] || raw;
+    const counts = {
+      tab: (line.match(/\t/g)||[]).length,
+      comma: (line.match(/,/g)||[]).length,
+      semi: (line.match(/;/g)||[]).length
+    };
+    const maxKey = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+    const forceDelim = (maxKey==='tab')?'\t':(maxKey==='semi'?';':',');
+    const forced = raw.split(/\r\n|\n|\r/).map(l => l.split(forceDelim)).filter(r => r.some(v => (v??'').toString().trim()!==''));
+    if (forced.length > best.rows.length) {
+      best = {rows: forced, delim: forceDelim, name: 'forced-'+(maxKey.toUpperCase())};
+    }
+  }
+
   dbg('Parser elegido:', best.name, 'filas:', best.rows.length);
-  return {rows: best.rows, delim: best.delim};
+  return {rows: best.rows, delim: best.delim, name: best.name};
 }
 
 /* ===== helpers ===== */
@@ -177,7 +213,7 @@ function guessColumns(rows){
   let bestNum=-1,bestNumScore=-1,bestState=-1,bestStateScore=-1;
   for(let c=0;c<cols;c++){
     let nS=0,sS=0;
-    for(let i=0;i<Math.min(rows.length,1000);i++){
+    for(let i=0;i<Math.min(rows.length,1200);i++){
       const v=(rows[i][c]||'').toString().trim();
       if(/^\d{1,8}$/.test(v)) nS++;
       const st=normalizeState(v); if(st==='libre'||st==='ocupado') sS++;
@@ -204,7 +240,7 @@ function card(num,status){
 function renderGridAll(list){const g=document.getElementById("grid");g.innerHTML="";list.forEach(it=>g.appendChild(card(it.num,it.status)))}
 function renderSearch(list){const l=document.getElementById("layer");l.style.display="none";l.innerHTML="";if(!list||!list.length)return;list.forEach(n=>l.appendChild(card(n,'libre')));l.style.display="flex"}
 
-/* ===== WA ===== */
+/* ===== WhatsApp ===== */
 function confirmNum(n){
   const ov=document.getElementById("ov");const b=document.getElementById("box");
   document.getElementById("q").textContent="¿Quieres separar este número? "+n;
@@ -248,18 +284,20 @@ async function loadConfig(){
 /* ===== rifas: lee TODAS las filas ===== */
 async function syncMap(){
   try{
-    // 1) intenta TSV, si da muy pocas filas, intenta CSV
-    let raw=await getText(CSV_URL_RAFFLES_TSV);
-    let parsed=parseSmart(raw);
+    // 0) RAW preview cuando debug
+    let raw = await getText(CSV_URL_RAFFLES_TSV);
+    if (DEBUG) { $dbg.style.display='block'; $dbg.textContent='RAW preview (primeros 1500 chars TSV):\n'+raw.slice(0,1500)+'\n---\n'; }
 
-    if(parsed.rows.length<3){
+    // 1) parsear TSV; si da pocas filas, intenta CSV y deja que parseSmart elija mejor
+    let parsed = parseSmart(raw);
+    if (parsed.rows.length < 3) {
       dbg('Pocas filas con TSV, probando CSV…');
-      raw=await getText(CSV_URL_RAFFLES_CSV);
-      parsed=parseSmart(raw);
+      raw = await getText(CSV_URL_RAFFLES_CSV);
+      if (DEBUG) { $dbg.textContent += 'RAW preview (primeros 1500 chars CSV):\n'+raw.slice(0,1500)+'\n---\n'; }
+      parsed = parseSmart(raw);
     }
-
-    const rows=parsed.rows;
-    dbg('RAFFLES filas finales:', rows.length);
+    const rows = parsed.rows;
+    dbg('RAFFLES filas finales:', rows.length, 'delim:', parsed.delim);
 
     if(!rows.length){ renderGridAll([]); showMsg("No hay datos (no se pudo parsear)",true); return; }
 
@@ -316,7 +354,7 @@ async function syncMap(){
   }
 }
 
-/* ===== buscador (no filtra dataset, solo resalta) ===== */
+/* ===== buscador ===== */
 function rerenderSearch(){
   const el=document.getElementById("search");
   const raw=(el.value||"").replace(/\D/g,"").slice(0,4);
