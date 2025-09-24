@@ -29,7 +29,7 @@ header div{display:flex;align-items:center;gap:12px}
 .msg.error{background:#ff3b30;border-color:#ffd0d0;color:#fff}
 .layer{position:fixed;top:calc(var(--header-h) + 12px);left:50%;transform:translateX(-50%);z-index:55;display:none;width:min(92vw,720px);pointer-events:auto;display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.38);z-index:64;display:none}
-.box{padding:28px;background:#0f3c1e;color:#ffffff;border-radius:20px;width:min(92vw,620px);text-align:center;font-size:clamp(18px,5vw,24px);font-weight:900;display:none;position:fixed;top:calc(var(--header-h) + 10px);left:50%;transform:translateX(-50%);z-index:65;box-shadow:0 20px 60px rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18)}
+.box{padding:28px;background:#0f3c1e;color:#ffffff;border-radius:20px;width:min(92vw,620px);text-align:center;font-size:clamp(18px,5vw,24px);font-weight:900;display:none;position:fixed;top:calc(var(--header-h) + 10px);left:50%;z-index:65;box-shadow:0 20px 60px rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18)}
 .box:before{content:"";position:absolute;inset:-2px;border-radius:inherit;padding:5px;background:conic-gradient(from 180deg at 50% 50%,var(--a2),var(--a1),var(--a3),var(--a2));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.95}
 .actions{display:flex;gap:10px;justify-content:center;margin-top:12px}
 .ok{background:linear-gradient(90deg,var(--a1),#a9ffdf);color:#062017}
@@ -66,21 +66,45 @@ header div{display:flex;align-items:center;gap:12px}
     </div>
 
     <script>
-/* === TUS URLs públicas (ya colocadas) === */
-const CSV_URL_RAFFLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv";
-const CSV_URL_CONFIG  = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=856149436&single=true&output=csv";
+/* === BASE DEL PROXY (tu Worker de Cloudflare) === */
+const PROXY = "https://csv-proxy.jeisendigital.workers.dev";
 
-/* Número WhatsApp por defecto (si el CSV no trae uno válido) */
+/* === TUS CSV (vía proxy, con encodeURIComponent) === */
+const CSV_URL_RAFFLES = PROXY + "?u=" + encodeURIComponent("https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv");
+const CSV_URL_CONFIG  = PROXY + "?u=" + encodeURIComponent("https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=856149436&single=true&output=csv");
+
+/* WhatsApp por defecto (si Config no trae) */
 const DEFAULT_WA_PHONE = "+573206413635";
 
-/* === Utilidades CSV y red === */
+/* === Utilidades red/CSV === */
 function bust(u){return u+(u.includes("?")?"&":"?")+"t="+Date.now()}
-function parseCSV(raw){return raw.trim().split(/\r?\n/).map(r=>r.split(","))}
 async function getCSV(url){const r=await fetch(bust(url),{cache:"no-store",credentials:"omit"});return await r.text()}
 
-/* === Estado en memoria === */
-let allMap = {};   // { "0001":"libre"/"ocupado", ... }
-let current = [];  // arreglo de libres aleatorios para el grid
+/* Parser CSV robusto (comillas, comas, saltos de línea; RFC 4180-ish) */
+function parseCSV(raw) {
+  if (!raw) return [];
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1); // BOM
+  const rows = []; let row = []; let field = ''; let inQuotes = false;
+  for (let i=0;i<raw.length;i++){
+    const c = raw[i], next = raw[i+1];
+    if (inQuotes){
+      if (c === '"'){
+        if (next === '"'){ field += '"'; i++; } else { inQuotes = false; }
+      } else { field += c; }
+    } else {
+      if (c === '"'){ inQuotes = true; }
+      else if (c === ','){ row.push(field); field=''; }
+      else if (c === '\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else if (c === '\r'){ /* ignore */ }
+      else { field += c; }
+    }
+  }
+  row.push(field); rows.push(row);
+  return rows.filter(r => r.some(v => (v||'').trim() !== ''));
+}
+
+/* === Estado === */
+let allMap = {};
 let waPhone = DEFAULT_WA_PHONE;
 
 /* === UI helpers === */
@@ -90,25 +114,47 @@ function renderGrid(list){const g=document.getElementById("grid");g.innerHTML=""
 function renderSearch(list,exact){const l=document.getElementById("layer");l.style.display="none";l.innerHTML="";if(!list||!list.length)return;list.forEach(n=>l.appendChild(card(n,!!exact)));l.style.display="flex"}
 
 /* === Confirmación + WhatsApp === */
-function confirmNum(n){const ov=document.getElementById("ov");const b=document.getElementById("box");document.getElementById("q").textContent="¿Quieres separar este número? "+n;ov.style.display="block";b.style.display="block";document.getElementById("yes").onclick=()=>{closeBox();openWA(n)};document.getElementById("no").onclick=closeBox}
+function confirmNum(n){
+  const ov=document.getElementById("ov");const b=document.getElementById("box");
+  document.getElementById("q").textContent="¿Quieres separar este número? "+n;
+  ov.style.display="block";b.style.display="block";
+  document.getElementById("yes").onclick=()=>{closeBox();openWA(n)};
+  document.getElementById("no").onclick=closeBox;
+}
 function closeBox(){document.getElementById("ov").style.display="none";document.getElementById("box").style.display="none"}
 function normPhone(p){const d=(p||"").replace(/\D/g,"");if(!d) return DEFAULT_WA_PHONE; if(d.startsWith("57")) return "+"+d; if(d.length===10) return "+57"+d; return "+"+d}
 function openWA(n){const msg="Hola, estoy interesado en separar este número: "+n;const url="https://api.whatsapp.com/send?phone="+encodeURIComponent(waPhone)+"&text="+encodeURIComponent(msg);window.open(url,"_blank")}
 
-/* === Carga Config (por encabezado) === */
+/* === Carga Config por encabezados === */
 async function loadConfig(){
   try{
     const raw = await getCSV(CSV_URL_CONFIG);
     const rows = parseCSV(raw);
-    if (!rows || rows.length < 2) return;
-    const headers = rows[0];
-    const values  = rows[1];
+    if (!rows || rows.length === 0) return;
+
+    // Encabezados: primera fila con >=2 celdas no vacías
+    let headerIdx = -1;
+    for (let i=0;i<rows.length;i++){
+      const filled = rows[i].filter(x => (x||'').trim()!=='');
+      if (filled.length >= 2){ headerIdx = i; break; }
+    }
+    if (headerIdx === -1) return;
+
+    const headers = rows[headerIdx].map(h => (h||'').toString().trim());
+
+    // Datos: primera fila después de encabezados con >=1 celda no vacía
+    let dataIdx = -1;
+    for (let j=headerIdx+1;j<rows.length;j++){
+      const filled = rows[j].filter(x => (x||'').trim()!=='');
+      if (filled.length >= 1){ dataIdx = j; break; }
+    }
+    if (dataIdx === -1) return;
+    const values = rows[dataIdx];
 
     const cfg = {};
-    for (let i = 0; i < headers.length; i++){
-      const key = (headers[i] || "").toString().trim();
-      if (!key) continue;
-      cfg[key] = (values[i] || "").toString();
+    for (let k=0;k<headers.length;k++){
+      const key = headers[k]; if (!key) continue;
+      cfg[key] = (values[k] || '').toString();
     }
 
     const name    = cfg["Nombre_De_La_Rifa"] || cfg["Nombre"] || cfg["Nombre_Comercial"] || "";
@@ -124,11 +170,11 @@ async function loadConfig(){
     waPhone = normPhone(phone) || DEFAULT_WA_PHONE;
 
   }catch(e){
-    // silencio en caso de fallo
+    // console.error('loadConfig error', e);
   }
 }
 
-/* === Sincroniza el mapa de rifas y genera grid === */
+/* === Sincroniza rifas y renderiza grid === */
 async function syncMap(){
   try{
     const t = await getCSV(CSV_URL_RAFFLES);
@@ -142,13 +188,13 @@ async function syncMap(){
       if (st === "libre") free.push(num);
     }
     allMap = map;
-    current = pickRandom(free, 400);
-    if(!document.body.classList.contains("has-text")) renderGrid(current);
+    const keys = Object.keys(allMap).filter(k => allMap[k]==="libre");
+    renderGrid(pickRandom(keys, 400));
   }catch(e){
     showMsg("Error de conexión", true);
   }
 }
-function pickRandom(arr,n){const a=arr.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,Math.min(n,a.length))}
+function pickRandom(arr,n){const a=arr.slice();for(let i=a.length-1;i>0;i++){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,Math.min(n,a.length))}
 
 /* === Buscador === */
 function rerenderSearch(){
