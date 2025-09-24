@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <title>Boletas de Rifa</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=overlays-content">
+    <!-- evita 404 del favicon -->
     <link rel="icon" href="data:,">
     <style>
 :root{--bg:#129a3a;--bg-deep:#0e7f30;--ink:#ffffff;--muted:#e5ffe8;--a1:#00ffa9;--a2:#3db7ff;--a3:#ffb24d;--header-h:90px}
@@ -67,58 +68,74 @@ header div{display:flex;align-items:center;gap:12px}
     </div>
 
     <script>
-/* === BASE DEL PROXY (tu Worker de Cloudflare) === */
+/* === PROXY (tu Worker de Cloudflare) === */
 const PROXY = "https://csv-proxy.jeisendigital.workers.dev";
 
-/* === TUS CSV (vía proxy) === */
+/* === URLs de tus hojas publicadas (vía proxy) === */
 const CSV_URL_RAFFLES = PROXY + "?u=" + encodeURIComponent("https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=1661037065&single=true&output=csv");
 const CSV_URL_CONFIG  = PROXY + "?u=" + encodeURIComponent("https://docs.google.com/spreadsheets/d/e/2PACX-1vSpEYmEB2HJGN2F3xokfLIvpbfGA70it6YSneM8MKc0flcXn7NfZwKgmTC3x2N8oOH1krkkJyOiakru/pub?gid=856149436&single=true&output=csv");
 
-/* WhatsApp por defecto (si Config no trae) */
+/* Fallback de WhatsApp si Config no trae teléfono */
 const DEFAULT_WA_PHONE = "+573206413635";
 
-/* ===== Utilidades red / cache bust ===== */
+/* ===== utilidades de red ===== */
 function bust(u){return u+(u.includes("?")?"&":"?")+"t="+Date.now()}
 async function getCSV(url){const r=await fetch(bust(url),{cache:"no-store",credentials:"omit"});return await r.text()}
 
-/* ===== Parser delimitado robusto (CSV o TSV), con comillas y saltos ===== */
+/* ===== detectar separador y parsear (CSV o TSV) con comillas/saltos ===== */
 function detectDelimiter(raw){
-  // Usa la primera línea no vacía para detectar separador
   const lines = raw.split(/\r?\n/).filter(l => l.trim()!=="");
   if (!lines.length) return ",";
   const first = lines[0];
   const commas = (first.match(/,/g)||[]).length;
   const tabs   = (first.match(/\t/g)||[]).length;
-  return tabs > commas ? "\t" : ",";
+  return tabs>commas ? "\t" : ",";
 }
-
 function parseDelimited(raw, delim){
   if (!raw) return [];
   if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1); // BOM
-  const rows=[]; let row=[]; let field=''; let inQuotes=false;
+  const rows=[]; let row=[], field='', inQ=false;
   for (let i=0;i<raw.length;i++){
-    const c=raw[i], next=raw[i+1];
-    if (inQuotes){
-      if (c==='"'){ if (next==='"'){ field+='"'; i++; } else { inQuotes=false; } }
-      else { field+=c; }
+    const c=raw[i], n=raw[i+1];
+    if (inQ){
+      if (c==='"'){ if (n==='"'){ field+='"'; i++; } else { inQ=false; } }
+      else field+=c;
     }else{
-      if (c==='"'){ inQuotes=true; }
+      if (c==='"'){ inQ=true; }
       else if (c===delim){ row.push(field); field=''; }
       else if (c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
-      else if (c==='\r'){ /* ignore */ }
-      else { field+=c; }
+      else if (c!=='\r'){ field+=c; }
     }
   }
   row.push(field); rows.push(row);
-  return rows.filter(r => r.some(v => (v||'').trim() !== ''));
+  return rows.filter(r => r.some(v => (v||'').trim()!==''));
 }
 
-/* ===== Estado en memoria ===== */
-let allMap = {};         // { "0001": "libre"/"ocupado", ... }
-let waPhone = DEFAULT_WA_PHONE;
+/* ===== helpers ===== */
+function norm(s){return (s||'').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function normalizeState(sRaw){
+  const s = norm(sRaw);
+  if (s === 'libre' || s === 'disponible' || s === 'free' || s === 'vacante') return 'libre';
+  // todo lo demás = ocupado (Asignado, Ocupado, Reservado, Vendido, Pagado, etc.)
+  return 'ocupado';
+}
+function findColumnIndexes(headers){
+  // intenta ubicar columna de número y estado por nombre
+  let numIdx=-1, stIdx=-1;
+  for (let i=0;i<headers.length;i++){
+    const h = norm(headers[i]);
+    if (numIdx===-1 && /(numero|n[úu]mero|boleta|ticket|num)/.test(h)) numIdx=i;
+    if (stIdx===-1 && /(estado|status|disponible|libre|ocupado|asignado|reservado|vendido|pagado)/.test(h)) stIdx=i;
+  }
+  return { numIdx, stIdx };
+}
 
-/* ===== UI helpers ===== */
-function showMsg(t,err){const m=document.getElementById("msg");m.textContent=t||"";m.classList.toggle("error",!!err);m.style.display="block";clearTimeout(showMsg._t);showMsg._t=setTimeout(()=>m.style.display="none", err?2500:1200)}
+/* ===== estado global ===== */
+let allMap = {};                 // { "0001":"libre"/"ocupado", ... }
+let waPhone = DEFAULT_WA_PHONE;  // teléfono para WhatsApp
+
+/* ===== UI ===== */
+function showMsg(t,err){const m=document.getElementById("msg");m.textContent=t||"";m.classList.toggle("error",!!err);m.style.display="block";clearTimeout(showMsg._t);showMsg._t=setTimeout(()=>m.style.display="none",err?2500:1200)}
 function card(num,big){const d=document.createElement("div");d.className="card"+(big?" big":"");d.innerHTML="<span>"+num+"</span>";d.addEventListener("click",()=>confirmNum(num));return d}
 function renderGrid(list){const g=document.getElementById("grid");g.innerHTML="";list.forEach(n=>g.appendChild(card(n,false)))}
 function renderSearch(list,exact){const l=document.getElementById("layer");l.style.display="none";l.innerHTML="";if(!list||!list.length)return;list.forEach(n=>l.appendChild(card(n,!!exact)));l.style.display="flex"}
@@ -135,37 +152,25 @@ function closeBox(){document.getElementById("ov").style.display="none";document.
 function normPhone(p){const d=(p||"").replace(/\D/g,"");if(!d) return DEFAULT_WA_PHONE; if(d.startsWith("57")) return "+"+d; if(d.length===10) return "+57"+d; return "+"+d}
 function openWA(n){const msg="Hola, estoy interesado en separar este número: "+n;const url="https://api.whatsapp.com/send?phone="+encodeURIComponent(waPhone)+"&text="+encodeURIComponent(msg);window.open(url,"_blank")}
 
-/* ===== Carga Config por encabezados ===== */
+/* ===== Cargar configuración ===== */
 async function loadConfig(){
   try{
     const raw = await getCSV(CSV_URL_CONFIG);
     const delim = detectDelimiter(raw);
     const rows = parseDelimited(raw, delim);
-    if (!rows || rows.length === 0) return;
+    if (!rows.length) return;
 
-    // Encabezados: primera fila con >=2 celdas no vacías
-    let headerIdx=-1;
-    for (let i=0;i<rows.length;i++){
-      const filled = rows[i].filter(x => (x||'').trim()!=='');
-      if (filled.length>=2){ headerIdx=i; break; }
-    }
-    if (headerIdx===-1) return;
+    // encabezados = primera fila con >=2 valores
+    let h=-1; for (let i=0;i<rows.length;i++){ if(rows[i].filter(x=>(x||'').trim()!=='').length>=2){ h=i; break; } }
+    if (h===-1) return;
+    const headers = rows[h].map(x=>(x||'').toString().trim());
 
-    const headers = rows[headerIdx].map(h => (h||'').toString().trim());
-    // Datos: primera fila después con >=1 valor
-    let dataIdx=-1;
-    for (let j=headerIdx+1;j<rows.length;j++){
-      const filled = rows[j].filter(x => (x||'').trim()!=='');
-      if (filled.length>=1){ dataIdx=j; break; }
-    }
-    if (dataIdx===-1) return;
+    // datos = primera fila con >=1 valor después de h
+    let d=-1; for (let j=h+1;j<rows.length;j++){ if(rows[j].filter(x=>(x||'').trim()!=='').length>=1){ d=j; break; } }
+    if (d===-1) return;
+    const vals = rows[d];
 
-    const values = rows[dataIdx];
-    const cfg = {};
-    for (let k=0;k<headers.length;k++){
-      const key=headers[k]; if(!key) continue;
-      cfg[key]=(values[k]||'').toString();
-    }
+    const cfg={}; for (let k=0;k<headers.length;k++){ const key=headers[k]; if(!key) continue; cfg[key]=(vals[k]||'').toString(); }
 
     const name    = cfg["Nombre_De_La_Rifa"] || cfg["Nombre"] || cfg["Nombre_Comercial"] || "";
     const phone   = cfg["Telefonos"] || cfg["Telefono"] || cfg["Teléfono"] || "";
@@ -184,48 +189,43 @@ async function loadConfig(){
   }
 }
 
-/* ===== Carga y normaliza mapa de rifas ===== */
+/* ===== Cargar mapa de rifas ===== */
 async function syncMap(){
   try{
     const raw = await getCSV(CSV_URL_RAFFLES);
     const delim = detectDelimiter(raw);
     const rows = parseDelimited(raw, delim);
+    if (!rows.length){ renderGrid([]); showMsg("No hay datos de rifas", true); return; }
 
-    // Buscar la primera fila que parezca "datos" (no encabezado):
-    // - Columna 1 con algo
-    // - Columna 2 con algo
-    let start = 0;
-    for (let i=0;i<rows.length;i++){
-      const a = (rows[i][0]||'').toString().trim();
-      const b = (rows[i][1]||'').toString().trim();
-      if (a && b){
-        // Si luce a encabezado (e.g., contiene letras en col 1 o dice "Estado" en col 2), salta
-        const aIsHeader = /[a-zA-Z]/.test(a);
-        const bIsHeader = /estado/i.test(b);
-        if (!(aIsHeader || bIsHeader)){ start = i; break; }
-      }
+    // ¿fila de encabezados?
+    let headerRowIdx=-1, headers=[];
+    for (let i=0;i<Math.min(5,rows.length);i++){
+      const a=(rows[i][0]||'').toString(), b=(rows[i][1]||'').toString();
+      const an=norm(a), bn=norm(b);
+      const looksHeader = (/[a-z]/.test(an) && /[a-z]/.test(bn)) ||
+                          /(numero|n[úu]mero|boleta|ticket)/.test(an) ||
+                          /(estado|status|disponible|libre|ocupado|asignado)/.test(bn);
+      if (looksHeader){ headerRowIdx=i; headers=rows[i].map(x=>(x||'').toString()); break; }
+    }
+
+    // identifica columnas
+    let numIdx=0, stIdx=1, dataStart=0;
+    if (headerRowIdx !== -1){
+      const idxs = findColumnIndexes(headers);
+      if (idxs.numIdx !== -1) numIdx = idxs.numIdx;
+      if (idxs.stIdx  !== -1) stIdx  = idxs.stIdx;
+      dataStart = headerRowIdx + 1;
     }
 
     const map = {}; const free = [];
-    for (let i=start;i<rows.length;i++){
-      let num = (rows[i][0]||'').toString().trim();
-      let st  = (rows[i][1]||'').toString().trim().toLowerCase();
+    for (let i=dataStart;i<rows.length;i++){
+      let num = (rows[i][numIdx]||'').toString().trim();
+      let st  = normalizeState(rows[i][stIdx]);
 
       if (!num) continue;
-      // normaliza número a 4 dígitos
-      num = num.replace(/\D/g,''); // por si vino "0007," etc.
+      num = num.replace(/\D/g,'');              // deja solo dígitos
       if (!num) continue;
-      num = num.padStart(4,'0');
-
-      // normaliza estado
-      st = st.normalize('NFD').replace(/[\u0300-\u036f]/g,''); // quita acentos
-      if (st.startsWith('libre')) st = 'libre';
-      else if (st.startsWith('ocup')) st = 'ocupado';
-      else if (st === '') continue; // sin estado, ignora
-      else {
-        // cualquier otro valor lo tratamos como "ocupado" para seguridad
-        st = 'ocupado';
-      }
+      num = num.padStart(4,'0');                // 4 dígitos
 
       map[num] = st;
       if (st === 'libre') free.push(num);
@@ -239,20 +239,14 @@ async function syncMap(){
       return;
     }
 
-    // Render aleatorio (hasta 400)
-    renderGrid(pickRandom(free, 400));
+    renderGrid(pickRandom(free, 400));          // muestra hasta 400 aleatorias
 
   }catch(e){
     renderGrid([]);
     showMsg("Error de conexión", true);
   }
 }
-
-function pickRandom(arr,n){
-  const a=arr.slice();
-  for(let i=a.length-1;i>0;i++){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}
-  return a.slice(0,Math.min(n,a.length));
-}
+function pickRandom(arr,n){const a=arr.slice();for(let i=a.length-1;i>0;i++){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,Math.min(n,a.length))}
 
 /* ===== Buscador ===== */
 function rerenderSearch(){
@@ -285,7 +279,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 
   loadConfig();
   syncMap();
-  setInterval(syncMap, 5000);
+  setInterval(syncMap, 5000);  // refresca cada 5s
 });
     </script>
   </body>
