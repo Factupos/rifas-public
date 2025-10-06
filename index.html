@@ -256,12 +256,14 @@ const gvizCsv = (gid) => {
   return `https://docs.google.com/spreadsheets/d/${KEY}/gviz/tq?tqx=out:csv&gid=${gid}&_=${ts}`;
 };
 
-// Normaliza estados frecuentes a 'libre' u 'ocupado'
+/*** ======= Normalización de ESTADO ======= ***/
+// Importante: vacío = LIBRE (tu hoja suele dejar vacío cuando está libre)
 function normStatus(s){
-  const t = String(s || '').trim().toLowerCase();
+  const t = String(s ?? '').trim().toLowerCase();
+  if (!t) return 'libre';
   if (['libre','disponible','available','free','desocupado','liberada','liberado'].includes(t)) return 'libre';
   if (['ocupado','asignado','vendido','separado','reservado','taken','busy','apartado'].includes(t)) return 'ocupado';
-  return t || 'ocupado';
+  return 'ocupado';
 }
 
 /*** ======= Estado ======= ***/
@@ -324,8 +326,7 @@ function parseCSV(text){
 }
 // Toma columnas por encabezado
 function indexByHeader(head, name){
-  const idx = head.findIndex(h => String(h).trim().toLowerCase() === name.toLowerCase());
-  return idx;
+  return head.findIndex(h => String(h).trim().toLowerCase() === name.toLowerCase());
 }
 
 /*** ======= Base 0000–9999 (ocupado por defecto) ======= */
@@ -493,6 +494,8 @@ async function syncMap(){
     let cNum = indexByHeader(head,'Numero_De_Rifa');
     if (cNum === -1) cNum = indexByHeader(head,'número_de_rifa');
     if (cNum === -1) cNum = head.findIndex(h => /n[uú]mero.*rifa/i.test(h));
+    // fallback amplio: "boleta" o "numero"
+    if (cNum === -1) cNum = head.findIndex(h => /boleta|n[uú]mero/i.test(h));
 
     let cSt  = indexByHeader(head,'Estado');
     if (cSt  === -1) cSt  = head.findIndex(h => /estado/i.test(h));
@@ -502,14 +505,28 @@ async function syncMap(){
     // Base 0000–9999 = ocupado
     const map = makeBaseMap();
 
-    // Superpone lo que venga de la hoja
     for (let i=1;i<rows.length;i++){
       const r = rows[i] || [];
-      const rawNum = (r[cNum] ?? '').toString().trim();
-      const rawSt  = (r[cSt]  ?? '').toString().trim();
-      if (!/^\d+$/.test(rawNum)) continue;
-      const num = pad4(rawNum);
-      map[num] = normStatus(rawSt); // 'libre' u 'ocupado'
+      let rawNum = (r[cNum] ?? '').toString().trim();
+      if (!rawNum) continue;
+
+      // Extrae número robustamente: primero intenta dígitos puros; si no, toma dígitos iniciales.
+      let cleaned = '';
+      if (/^\d{1,4}$/.test(rawNum)){
+        cleaned = rawNum;
+      }else{
+        const m = rawNum.match(/^(\d{1,4})/);
+        if (m) cleaned = m[1];
+        else {
+          const onlyDigits = rawNum.replace(/\D/g,'');
+          if (onlyDigits.length >= 1 && onlyDigits.length <= 4) cleaned = onlyDigits;
+          else continue;
+        }
+      }
+
+      const num = cleaned.padStart(4,'0');
+      const rawSt = (r[cSt] ?? '').toString();
+      map[num] = normStatus(rawSt); // vacío => LIBRE
     }
 
     const newFree = Object.keys(map).filter(k => map[k] === 'libre').length;
@@ -518,7 +535,7 @@ async function syncMap(){
     // Limpia diarios que ya no estén libres
     DAILY = (DAILY || []).filter(n => ALL[n] === 'libre');
 
-    // Repoblar si corresponde
+    // Repoblar si corresponde (más libres o DAILY vacío teniendo libres)
     if ((DAILY.length === 0 && newFree > 0) || newFree > prevFree){
       pickDaily(true);
       renderGrid();
@@ -553,8 +570,8 @@ async function rerenderSearch(){
     if (!ALL || !Object.keys(ALL).length){ msg('Sin conexión o datos.', true); return; }
   }
 
-  const padded = pad4(raw); // 7 -> 0007, 654 -> 0654
-  const st = ALL[padded] || 'ocupado'; // por defecto, ocupado
+  const padded = pad4(raw); // 7 -> 0007, 125 -> 0125
+  const st = ALL[padded] || 'ocupado'; // si por alguna razón no está, trátalo como ocupado
   if (st === 'libre'){
     renderSearchOne(padded);
   }else{
@@ -607,7 +624,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     }
   });
 
-  // Botón ALEATORIO: busca de 0000–9999; prioriza un libre global
+  // Botón ALEATORIO: elige libre global; si no hay, elige cualquiera 0000–9999 y reporta su estado
   document.getElementById('randomButton').addEventListener('click', async function() {
     const loading = document.getElementById('loadingMessage');
     const layer = document.getElementById('searchResult');
@@ -624,14 +641,12 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     const libres = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre');
 
     if (libres.length){
-      // Elige un libre al azar del universo completo (no DAILY)
       chosen = libres[randInt(libres.length)];
     }else{
-      // Si no hay libres, elige cualquier número 0000–9999 y muestra su estado
       chosen = String(randInt(10000)).padStart(4,'0');
     }
 
-    SEARCH_INPUT.value = String(parseInt(chosen, 10)); // deja que se muestre sin ceros a la izquierda en el input
+    SEARCH_INPUT.value = String(parseInt(chosen, 10)); // muestra sin ceros a la izquierda en el input
     document.body.classList.add('search-has-text');
 
     const st = ALL[chosen] || 'ocupado';
