@@ -250,9 +250,19 @@ const GID_RAFFLES = '1661037065';     // Hoja: Numero_De_Rifas
 const GID_CONFIG  = '856149436';      // Hoja: Config_Publica (o equivalente público)
 const PROXY = 'https://csv-proxy.jeisendigital.workers.dev/?u='; // tu Worker
 
-// Construye URL gviz CSV por gid
-const gvizCsv = (gid) =>
-  `https://docs.google.com/spreadsheets/d/${KEY}/gviz/tq?tqx=out:csv&gid=${gid}`;
+// Construye URL gviz CSV por gid con cache-bust
+const gvizCsv = (gid) => {
+  const ts = Date.now();
+  return `https://docs.google.com/spreadsheets/d/${KEY}/gviz/tq?tqx=out:csv&gid=${gid}&_=${ts}`;
+};
+
+// Normaliza estados frecuentes a 'libre' u 'ocupado'
+function normStatus(s){
+  const t = String(s || '').trim().toLowerCase();
+  if (['libre','disponible','available','free','desocupado','liberada','liberado'].includes(t)) return 'libre';
+  if (['ocupado','asignado','vendido','separado','reservado','taken','busy','apartado'].includes(t)) return 'ocupado';
+  return t || 'ocupado';
+}
 
 /*** ======= Estado ======= ***/
 let ALL = {};             // mapa completo { "0000": "libre"/"ocupado"/... }
@@ -426,6 +436,36 @@ async function loadConfig(){
   }
 }
 
+/*** ======= Persistencia/Selección diaria ======= ***/
+function persistDaily(){
+  const key = 'daily_' + todayKey();
+  try { localStorage.setItem(key, JSON.stringify(DAILY || [])); } catch(_){}
+}
+
+function pickDaily(force=false){
+  const key = 'daily_' + todayKey();
+
+  if (!force){
+    try{
+      const cached = JSON.parse(localStorage.getItem(key) || '[]');
+      if (Array.isArray(cached) && cached.length){
+        // valida contra el mapa actual
+        DAILY = cached.filter(n => ALL[n] === 'libre');
+        if (DAILY.length){ persistDaily(); return; }
+      }
+    }catch(_){}
+  }
+
+  const libres = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre');
+  // Fisher–Yates
+  for (let i=libres.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [libres[i],libres[j]] = [libres[j],libres[i]];
+  }
+  DAILY = libres.slice(0, 400);
+  persistDaily();
+}
+
 /*** ======= Carga de MAPA (todas las boletas) ======= ***/
 async function syncMap(){
   try{
@@ -436,60 +476,48 @@ async function syncMap(){
       return;
     }
     const head = rows[0].map(h=>String(h).trim());
-    // Columnas esperadas
+
+    // Columnas esperadas (tolerantes)
     let cNum = indexByHeader(head,'Numero_De_Rifa');
+    if (cNum === -1) cNum = indexByHeader(head,'número_de_rifa');
+    if (cNum === -1) cNum = head.findIndex(h => /n[uú]mero.*rifa/i.test(h));
+
     let cSt  = indexByHeader(head,'Estado');
-    // tolerancia por si están en mayúsculas/minúsculas raras
-    if (cNum === -1) cNum = indexByHeader(head,'numero_de_rifa');
-    if (cSt  === -1) cSt  = indexByHeader(head,'estado');
+    if (cSt  === -1) cSt  = head.findIndex(h => /estado/i.test(h));
+
+    const prevFree = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre').length;
 
     const map = {};
     for (let i=1;i<rows.length;i++){
-      const r = rows[i];
+      const r = rows[i] || [];
       const rawNum = (r[cNum] ?? '').toString().trim();
-      const rawSt  = (r[cSt]  ?? '').toString().trim().toLowerCase();
+      const rawSt  = (r[cSt]  ?? '').toString().trim();
       if (!/^\d+$/.test(rawNum)) continue;      // filtra basura/autenticación
       const num = pad4(rawNum);
-      const st  = rawSt || 'ocupado';
+      const st  = normStatus(rawSt);
       map[num] = st;
     }
+
+    const newFree = Object.keys(map).filter(k => map[k] === 'libre').length;
     ALL = map;
 
-    // si ya tenemos DAILY, limpiamos ocupados
-    if (DAILY && DAILY.length){
-      const before = DAILY.length;
-      DAILY = DAILY.filter(n => ALL[n] === 'libre');
-      if (before !== DAILY.length) renderGrid();
+    // limpia diarios que ya no estén libres
+    DAILY = (DAILY || []).filter(n => ALL[n] === 'libre');
+
+    // Si ahora hay libres y DAILY está vacío, o aumentaron los libres => repoblar
+    if ((DAILY.length === 0 && newFree > 0) || newFree > prevFree){
+      pickDaily(true);   // fuerza reconstrucción
+      renderGrid();
+    } else {
+      persistDaily();
     }
   }catch(e){
     console.warn('syncMap error', e);
   }
 }
 
-/*** ======= Selección diaria (400 libres) ======= ***/
-function pickDaily(){
-  const key = 'daily_'+todayKey();
-  const cached = localStorage.getItem(key);
-  if (cached){
-    try{
-      DAILY = JSON.parse(cached) || [];
-      return;
-    }catch(_){}
-  }
-  // construir libres
-  const libres = Object.keys(ALL).filter(k => ALL[k] === 'libre');
-  // barajar
-  for (let i=libres.length-1;i>0;i--){
-    const j = Math.floor(Math.random()*(i+1));
-    [libres[i],libres[j]] = [libres[j],libres[i]];
-  }
-  DAILY = libres.slice(0, 400);
-  localStorage.clear(); // limpia días anteriores
-  localStorage.setItem(key, JSON.stringify(DAILY));
-}
-
 /*** ======= Buscar exacto ======= ***/
-function rerenderSearch(){
+async function rerenderSearch(){
   const msgEl = document.getElementById('message');
   msgEl.style.display = 'none';
 
@@ -508,12 +536,14 @@ function rerenderSearch(){
 
   if (!ALL || !Object.keys(ALL).length){
     msg('Verificando disponibilidad…');
-    return;
+    await syncMap(); // reintenta traer CSV fresco
+    if (!ALL || !Object.keys(ALL).length){ msg('Sin conexión o datos.', true); return; }
   }
+
   const padded = pad4(raw);
   const st = ALL[padded];
   if (typeof st === 'undefined'){
-    msg('Número inexistente');
+    msg('Número inexistente', true);
     return;
   }
   if (st === 'libre'){
@@ -560,7 +590,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   SEARCH_INPUT.addEventListener('click', function(){
     if (document.activeElement !== SEARCH_INPUT) SEARCH_INPUT.focus({preventScroll:true});
   }, {passive:true});
-  SEARCH_INPUT.addEventListener('input', rerenderSearch);
+  SEARCH_INPUT.addEventListener('input', () => { rerenderSearch(); });
   SEARCH_INPUT.addEventListener('blur', function(){
     if (!MODAL_OPEN && SEARCH_INPUT.value.trim().length === 0){
       document.body.classList.remove('search-has-text');
@@ -568,8 +598,8 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     }
   });
 
-  // Botón ALEATORIO
-  document.getElementById('randomButton').addEventListener('click', function() {
+  // Botón ALEATORIO (con plan B si DAILY está vacío)
+  document.getElementById('randomButton').addEventListener('click', async function() {
     const loading = document.getElementById('loadingMessage');
     const layer = document.getElementById('searchResult');
     const message = document.getElementById('message');
@@ -579,6 +609,11 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     layer.innerHTML = '';
     message.style.display = 'none';
 
+    if (!ALL || !Object.keys(ALL).length){ await syncMap(); }
+    if (!DAILY || DAILY.length === 0){
+      pickDaily(true); // fuerza repoblar con libres actuales
+    }
+
     const keys = DAILY.slice(); // ya son libres
     if (keys.length === 0){
       loading.style.display = 'none';
@@ -586,7 +621,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
       return;
     }
     const randomNumber = keys[Math.floor(Math.random() * keys.length)];
-    SEARCH_INPUT.value = parseInt(randomNumber, 10).toString();
+    SEARCH_INPUT.value = String(parseInt(randomNumber, 10));
     document.body.classList.add('search-has-text');
     renderSearchOne(randomNumber);
     setTimeout(()=>{ loading.style.display = 'none'; }, 300);
@@ -610,18 +645,10 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   // Timers (cada 5s como Apps Script)
   GRID_TIMER = setInterval(()=> renderGrid(), 5000);
   MAP_TIMER  = setInterval(async ()=>{
-    const prev = JSON.stringify(ALL);
     await syncMap();
-    // si cambió mapa, revalidamos DAILY al vuelo y re-render
     renderGrid();
   }, 5000);
 });
   </script>
 </body>
 </html>
-
-
-
-
-
-
