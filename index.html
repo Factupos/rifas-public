@@ -250,25 +250,42 @@ const GID_RAFFLES = '1661037065';     // Hoja: Numero_De_Rifas
 const GID_CONFIG  = '856149436';      // Hoja: Config_Publica (o equivalente público)
 const PROXY = 'https://csv-proxy.jeisendigital.workers.dev/?u='; // tu Worker
 
-// Construye URL gviz CSV por gid con cache-bust
-const gvizCsv = (gid) => {
+/*** ======= Endpoints CSV (fallbacks) ======= ***/
+const csvUrls = (gid) => {
   const ts = Date.now();
-  return `https://docs.google.com/spreadsheets/d/${KEY}/gviz/tq?tqx=out:csv&gid=${gid}&_=${ts}`;
+  return [
+    `https://docs.google.com/spreadsheets/d/${KEY}/export?format=csv&gid=${gid}&_=${ts}`,
+    `https://docs.google.com/spreadsheets/d/${KEY}/gviz/tq?tqx=out:csv&gid=${gid}&_=${ts}`,
+  ];
 };
+const fetchText = async (url) => {
+  const res = await fetch(PROXY + encodeURIComponent(url), {cache:'no-store', credentials:'omit'});
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  return res.text();
+};
+async function fetchCsvAny(gid){
+  const urls = csvUrls(gid);
+  let lastErr = null, txt = '';
+  for (const u of urls){
+    try{ txt = await fetchText(u); if (txt && !txt.trimStart().startsWith('<')) return txt; } 
+    catch(e){ lastErr = e; }
+  }
+  if (txt) return txt; // por si vino con HTML de auth, lo devuelve igual para que falle arriba
+  throw lastErr || new Error('No se pudo obtener CSV');
+}
 
-/*** ======= Normalización de ESTADO ======= ***/
-// Importante: vacío = LIBRE (tu hoja suele dejar vacío cuando está libre)
-function normStatus(s){
+/*** ======= Normalización ESTADO (A/B) ======= ***/
+// Solo col A (número) y col B (Asignado/Libre). Vacío => OCUPADO (según tu requerimiento)
+function normStatusAB(s){
   const t = String(s ?? '').trim().toLowerCase();
-  if (!t) return 'libre';
-  if (['libre','disponible','available','free','desocupado','liberada','liberado'].includes(t)) return 'libre';
-  if (['ocupado','asignado','vendido','separado','reservado','taken','busy','apartado'].includes(t)) return 'ocupado';
+  if (t === 'libre') return 'libre';
+  if (t === 'asignado' || !t) return 'ocupado';
   return 'ocupado';
 }
 
 /*** ======= Estado ======= ***/
-let ALL = {};             // mapa completo { "0000": "libre"/"ocupado" }
-let DAILY = [];           // arreglo con hasta 400 libres del día
+let ALL = {};             // { "0000": "libre"/"ocupado" }
+let DAILY = [];           // hasta 400 libres
 let SEARCH_INPUT = null;
 let GRID_TIMER = null;
 let MAP_TIMER = null;
@@ -276,7 +293,7 @@ let MODAL_OPEN = false;
 
 /*** ======= Utilidades ======= */
 const pad4 = n => String(n).replace(/\D/g,'').slice(0,4).padStart(4,'0');
-const todayKey = () => new Date().toISOString().slice(0,10); // YYYY-MM-DD
+const todayKey = () => new Date().toISOString().slice(0,10);
 function randInt(maxExclusive){
   if (window.crypto && window.crypto.getRandomValues){
     const b = new Uint32Array(1);
@@ -285,20 +302,7 @@ function randInt(maxExclusive){
   }
   return Math.floor(Math.random()*maxExclusive);
 }
-const msg = (text, error=false) => {
-  const el = document.getElementById('message');
-  el.textContent = text || '';
-  el.classList.toggle('error', !!error);
-  el.style.display = 'block';
-  clearTimeout(msg._t);
-  msg._t = setTimeout(()=>{ el.style.display = 'none'; }, error ? 2600 : 1400);
-};
-const fetchText = async (url) => {
-  const res = await fetch(PROXY + encodeURIComponent(url), {cache:'no-store', credentials:'omit'});
-  if(!res.ok) throw new Error('HTTP '+res.status);
-  return res.text();
-};
-// CSV-parser simple y robusto
+// CSV-parser soportando comillas dobles
 function parseCSV(text){
   if (text.trimStart().startsWith('<')) return [];
   const rows = [];
@@ -324,10 +328,6 @@ function parseCSV(text){
   push();
   return rows.filter(r => r.some(x=>String(x).trim()!=='')); 
 }
-// Toma columnas por encabezado
-function indexByHeader(head, name){
-  return head.findIndex(h => String(h).trim().toLowerCase() === name.toLowerCase());
-}
 
 /*** ======= Base 0000–9999 (ocupado por defecto) ======= */
 function makeBaseMap(){
@@ -338,59 +338,38 @@ function makeBaseMap(){
   return map;
 }
 
-/*** ======= Modal ======= ***/
+/*** ======= Modal / UI helpers ======= ***/
 function confirmNum(n){
   const ov  = document.getElementById("ov");
   const box = document.getElementById("box");
   const yes = document.getElementById("yes");
   const no  = document.getElementById("no");
   const q   = document.getElementById("q");
-
-  if(!ov || !box || !yes || !no || !q){
-    console.warn("Modal: faltan nodos"); 
-    return;
-  }
+  if(!ov || !box || !yes || !no || !q){ return; }
   MODAL_OPEN = true;
   q.textContent = "¿Quieres separar este número? " + n;
-
   box.style.display = "block";
   ov.classList.add("show");
   ov.setAttribute("aria-hidden","false");
-
-  yes.onclick = (e)=>{
-    e.preventDefault(); e.stopPropagation();
-    closeBox(); openWA(n);
-  };
-  no.onclick = (e)=>{
-    e.preventDefault(); e.stopPropagation();
-    closeBox();
-  };
-  ov.onclick = ()=> closeBox();
+  yes.onclick = (e)=>{ e.preventDefault(); e.stopPropagation(); closeBox(); openWA(n); };
+  no.onclick  = (e)=>{ e.preventDefault(); e.stopPropagation(); closeBox(); };
+  ov.onclick  = ()=> closeBox();
   box.onclick = (e)=> e.stopPropagation();
-
   setTimeout(()=>{ try{ yes.focus(); }catch(_){} }, 0);
 }
-
 function closeBox(){
   const ov  = document.getElementById("ov");
   const box = document.getElementById("box");
   MODAL_OPEN = false;
-  if(ov){
-    ov.classList.remove("show");
-    ov.setAttribute("aria-hidden","true");
-  }
+  if(ov){ ov.classList.remove("show"); ov.setAttribute("aria-hidden","true"); }
   if(box){ box.style.display = "block"; }
 }
-
 function openWA(number){
   const tel = (window.__CONFIG_PHONE || '').replace(/\D/g,'') || '573206413635';
   const message = "Hola, estoy interesado en separar este número: " + number;
   const url = "https://api.whatsapp.com/send?phone=" + tel + "&text=" + encodeURIComponent(message);
-  const w = window.open(url, '_blank');
-  if (!w){ location.href = url; }
+  const w = window.open(url, '_blank'); if (!w){ location.href = url; }
 }
-
-/*** ======= UI ======= ***/
 function makeTile(num, large){
   const el = document.createElement('div');
   el.className = 'raffle' + (large ? ' large-raffle' : '');
@@ -399,16 +378,13 @@ function makeTile(num, large){
   el.addEventListener('pointerdown', ()=>{}, {passive:true});
   return el;
 }
-
 function renderGrid(){
   const wrap = document.getElementById('raffles');
   if (!wrap) return;
   if (document.body.classList.contains('search-has-text') || MODAL_OPEN) return;
-
   wrap.innerHTML = '';
   DAILY.forEach(n => wrap.appendChild(makeTile(n, false)));
 }
-
 function renderSearchOne(num){
   const layer = document.getElementById('searchResult');
   layer.style.display = 'none';
@@ -417,7 +393,6 @@ function renderSearchOne(num){
   layer.appendChild(makeTile(num, true));
   layer.style.display = 'flex';
 }
-
 function clearSearchLayer(){
   const layer = document.getElementById('searchResult');
   layer.style.display = 'none';
@@ -427,13 +402,11 @@ function clearSearchLayer(){
 /*** ======= Carga de CONFIG ======= ***/
 async function loadConfig(){
   try{
-    const txt = await fetchText(gvizCsv(GID_CONFIG));
+    const txt = await fetchCsvAny(GID_CONFIG);
     const rows = parseCSV(txt);
     if(rows.length < 2) return;
-    const head = rows[0];
-    const data = rows[1];
-
-    const hIdx = (name) => indexByHeader(head, name);
+    const head = rows[0]; const data = rows[1];
+    const hIdx = (name) => head.findIndex(h => String(h).trim().toLowerCase() === name.toLowerCase());
 
     const name = data[hIdx('Nombre_APP')] || data[hIdx('Nombre_De_La_Rifa')] || 'Rifas';
     const phone = data[hIdx('Telefonos')] || '';
@@ -444,11 +417,8 @@ async function loadConfig(){
     document.getElementById('phone').textContent = phone ? ('Tel: ' + phone) : '';
     document.getElementById('address').textContent = address ? ('Dir: ' + address) : '';
     document.getElementById('logoImg').src = String(logo || '').trim();
-
     window.__CONFIG_PHONE = phone || '';
-  }catch(e){
-    console.warn('Config error', e);
-  }
+  }catch(e){ console.warn('Config error', e); }
 }
 
 /*** ======= Persistencia/Selección diaria ======= ***/
@@ -456,10 +426,8 @@ function persistDaily(){
   const key = 'daily_' + todayKey();
   try { localStorage.setItem(key, JSON.stringify(DAILY || [])); } catch(_){}
 }
-
 function pickDaily(force=false){
   const key = 'daily_' + todayKey();
-
   if (!force){
     try{
       const cached = JSON.parse(localStorage.getItem(key) || '[]');
@@ -469,7 +437,6 @@ function pickDaily(force=false){
       }
     }catch(_){}
   }
-
   const libres = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre');
   // Fisher–Yates con aleatoriedad fuerte
   for (let i=libres.length-1;i>0;i--){
@@ -480,71 +447,49 @@ function pickDaily(force=false){
   persistDaily();
 }
 
-/*** ======= Carga de MAPA (todas las boletas) ======= */
+/*** ======= Carga MAPA (solo columnas A/B) ======= */
 async function syncMap(){
   try{
-    const txt = await fetchText(gvizCsv(GID_RAFFLES));
+    const txt = await fetchCsvAny(GID_RAFFLES);
     const rows = parseCSV(txt);
-    if(rows.length < 2){
-      console.warn('No hay filas');
-      return;
-    }
-    const head = rows[0].map(h=>String(h).trim());
-
-    let cNum = indexByHeader(head,'Numero_De_Rifa');
-    if (cNum === -1) cNum = indexByHeader(head,'número_de_rifa');
-    if (cNum === -1) cNum = head.findIndex(h => /n[uú]mero.*rifa/i.test(h));
-    // fallback amplio: "boleta" o "numero"
-    if (cNum === -1) cNum = head.findIndex(h => /boleta|n[uú]mero/i.test(h));
-
-    let cSt  = indexByHeader(head,'Estado');
-    if (cSt  === -1) cSt  = head.findIndex(h => /estado/i.test(h));
+    if(rows.length < 2){ console.warn('No hay filas'); return; }
 
     const prevFree = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre').length;
 
     // Base 0000–9999 = ocupado
     const map = makeBaseMap();
 
+    // Solo A/B: A = número, B = estado (Asignado/Libre)
+    // Saltamos encabezado (fila 0)
     for (let i=1;i<rows.length;i++){
       const r = rows[i] || [];
-      let rawNum = (r[cNum] ?? '').toString().trim();
-      if (!rawNum) continue;
+      const a = (r[0] ?? '').toString().trim(); // Col A
+      const b = (r[1] ?? '').toString().trim(); // Col B
 
-      // Extrae número robustamente: primero intenta dígitos puros; si no, toma dígitos iniciales.
-      let cleaned = '';
-      if (/^\d{1,4}$/.test(rawNum)){
-        cleaned = rawNum;
-      }else{
-        const m = rawNum.match(/^(\d{1,4})/);
-        if (m) cleaned = m[1];
-        else {
-          const onlyDigits = rawNum.replace(/\D/g,'');
-          if (onlyDigits.length >= 1 && onlyDigits.length <= 4) cleaned = onlyDigits;
-          else continue;
-        }
-      }
+      if (!a) continue;
+      // extrae hasta 4 dígitos (tolerante)
+      let digits = a.replace(/\D/g,'');
+      if (!digits) continue;
+      if (digits.length > 4) digits = digits.slice(0,4);
+      const num = digits.padStart(4,'0');
 
-      const num = cleaned.padStart(4,'0');
-      const rawSt = (r[cSt] ?? '').toString();
-      map[num] = normStatus(rawSt); // vacío => LIBRE
+      map[num] = normStatusAB(b); // Libre/Asignado -> libre/ocupado
     }
 
     const newFree = Object.keys(map).filter(k => map[k] === 'libre').length;
     ALL = map;
 
-    // Limpia diarios que ya no estén libres
+    // Mantén DAILY consistente con ALL
     DAILY = (DAILY || []).filter(n => ALL[n] === 'libre');
 
-    // Repoblar si corresponde (más libres o DAILY vacío teniendo libres)
-    if ((DAILY.length === 0 && newFree > 0) || newFree > prevFree){
+    // Repoblar si cambió la disponibilidad
+    if ((DAILY.length === 0 && newFree > 0) || newFree !== prevFree){
       pickDaily(true);
       renderGrid();
     } else {
       persistDaily();
     }
-  }catch(e){
-    console.warn('syncMap error', e);
-  }
+  }catch(e){ console.warn('syncMap error', e); }
 }
 
 /*** ======= Buscar exacto ======= */
@@ -567,21 +512,17 @@ async function rerenderSearch(){
 
   if (!ALL || !Object.keys(ALL).length){
     await syncMap();
-    if (!ALL || !Object.keys(ALL).length){ msg('Sin conexión o datos.', true); return; }
+    if (!ALL || !Object.keys(ALL).length){ showBusy('Sin conexión o datos.'); return; }
   }
 
-  const padded = pad4(raw); // 7 -> 0007, 125 -> 0125
-  const st = ALL[padded] || 'ocupado'; // si por alguna razón no está, trátalo como ocupado
-  if (st === 'libre'){
-    renderSearchOne(padded);
-  }else{
-    msg('Boleta ocupada', true);
-  }
+  const padded = pad4(raw); // 7 -> 0007, 125 -> 0125, 8620 -> 8620
+  const st = ALL[padded] || 'ocupado';
+  if (st === 'libre'){ renderSearchOne(padded); }
+  else { msg('Boleta ocupada', true); }
 }
 
 /*** ======= Init ======= */
 document.addEventListener('DOMContentLoaded', async ()=>{
-  // viewport offset para webviews
   function applyViewportOffset(){
     var top = 0;
     if (window.visualViewport){
@@ -598,7 +539,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   }
 
   SEARCH_INPUT = document.getElementById('search');
-  // Foco rápido móvil
   function instantFocus(e){
     if (document.activeElement !== SEARCH_INPUT) {
       e.preventDefault();
@@ -624,7 +564,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     }
   });
 
-  // Botón ALEATORIO: elige libre global; si no hay, elige cualquiera 0000–9999 y reporta su estado
+  // Botón ALEATORIO: libre global si existe; si no, cualquiera 0000–9999
   document.getElementById('randomButton').addEventListener('click', async function() {
     const loading = document.getElementById('loadingMessage');
     const layer = document.getElementById('searchResult');
@@ -646,16 +586,12 @@ document.addEventListener('DOMContentLoaded', async ()=>{
       chosen = String(randInt(10000)).padStart(4,'0');
     }
 
-    SEARCH_INPUT.value = String(parseInt(chosen, 10)); // muestra sin ceros a la izquierda en el input
+    SEARCH_INPUT.value = String(parseInt(chosen, 10)); // se ve “humano” en el input
     document.body.classList.add('search-has-text');
 
     const st = ALL[chosen] || 'ocupado';
-    if (st === 'libre'){
-      renderSearchOne(chosen);
-    }else{
-      msg('Boleta ocupada', true);
-      clearSearchLayer();
-    }
+    if (st === 'libre'){ renderSearchOne(chosen); }
+    else { msg('Boleta ocupada', true); clearSearchLayer(); }
 
     setTimeout(()=>{ loading.style.display = 'none'; }, 300);
   }, {passive:true});
@@ -672,7 +608,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   // Carga inicial
   await loadConfig();
   await syncMap();
-  pickDaily();
+  pickDaily(true); // fuerza generar 400 si hay
   renderGrid();
 
   // Timers (cada 5s)
