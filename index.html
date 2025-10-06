@@ -46,7 +46,7 @@ header{
   border-bottom:1px solid rgba(255,255,255,.12);
   box-shadow:0 10px 26px rgba(0,0,0,.35);
 }
-/* --- FIX PARPADEO/MOVIMIENTO ENCABEZADO EN MÓVIL (sin cambiar nada más) --- */
+/* --- FIX PARPADEO/MOVIMIENTO ENCABEZADO EN MÓVIL --- */
 header{ top:0 !important; transform:translateZ(0); -webkit-transform:translateZ(0); backface-visibility:hidden; contain:paint; }
 
 .brand{display:flex;align-items:center;gap:12px}
@@ -303,6 +303,13 @@ function msg(text, error=false){
   clearTimeout(msg._t);
   msg._t = setTimeout(()=>{ el.style.display = 'none'; }, error ? 2600 : 1400);
 }
+// 🔽 Nuevo helper: ocultar el mensaje inmediatamente
+function hideMsg(){
+  const el = document.getElementById('message');
+  if (!el) return;
+  clearTimeout(msg._t);
+  el.style.display = 'none';
+}
 // CSV-parser
 function parseCSV(text){
   if (text.trimStart().startsWith('<')) return [];
@@ -340,7 +347,7 @@ function makeBaseMap(){
 }
 
 /*** ======= Normalización (solo col B) ======= */
-// Columna B: "Libre" o "Asignado". Vacío => OCUPADO (porque dices que B siempre pone uno de esos)
+// Columna B: "Libre" o "Asignado". Vacío => OCUPADO
 function normStatusAB(s){
   const t = String(s ?? '').trim().toLowerCase();
   if (t === 'libre') return 'libre';
@@ -392,7 +399,10 @@ function renderGrid(){
   if (!wrap) return;
   if (document.body.classList.contains('search-has-text') || MODAL_OPEN) return;
   wrap.innerHTML = '';
-  DAILY.forEach(n => wrap.appendChild(makeTile(n, false)));
+  DAILY.forEach(n => appendTile(n, wrap));
+}
+function appendTile(n, wrap){
+  wrap.appendChild(makeTile(n, false));
 }
 function renderSearchOne(num){
   const layer = document.getElementById('searchResult');
@@ -440,7 +450,7 @@ function loadDailyFromCache(){
   try{
     const cached = JSON.parse(localStorage.getItem(key) || '[]');
     if (Array.isArray(cached) && cached.length){
-      DAILY = cached.filter(n => ALL[n] === 'libre'); // solo mantener los que sigan libres
+      DAILY = cached.filter(n => ALL[n] === 'libre'); // mantener los que sigan libres
       persistDaily();
       return DAILY.length > 0;
     }
@@ -499,6 +509,10 @@ async function syncMap(){
 /*** ======= Buscar exacto ======= */
 async function rerenderSearch(){
   const layer = document.getElementById('searchResult');
+
+  // 🔽 Oculta cualquier mensaje previo al empezar una nueva búsqueda
+  hideMsg();
+
   const raw = (SEARCH_INPUT.value || '').replace(/\D/g,'').slice(0,4);
   if (SEARCH_INPUT.value !== raw) SEARCH_INPUT.value = raw;
 
@@ -520,9 +534,10 @@ async function rerenderSearch(){
   const st = ALL[padded] || 'ocupado';
 
   if (st === 'libre'){
+    // 🔽 Asegura que el cartel “ocupada” desaparezca YA
+    hideMsg();
     renderSearchOne(padded);
   }else{
-    // Mostrar explícitamente OCUPADA aunque no se muestre tarjeta
     clearSearchLayer();
     msg('Boleta ocupada', true);
   }
@@ -579,8 +594,8 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     loading.style.display = 'block';
     layer.style.display = 'none';
     layer.innerHTML = '';
-    // ocultar cualquier msg previo
-    const m = document.getElementById('message'); if (m) m.style.display = 'none';
+    // 🔽 Usa el helper para limpiar mensajes previos
+    hideMsg();
 
     if (!ALL || !Object.keys(ALL).length){ await syncMap(); }
 
@@ -598,6 +613,8 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 
     const st = ALL[chosen] || 'ocupado';
     if (st === 'libre'){
+      // 🔽 Asegura que el cartel no se vea si justo estaba activo
+      hideMsg();
       renderSearchOne(chosen);
     }else{
       clearSearchLayer();
