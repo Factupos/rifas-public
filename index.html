@@ -55,33 +55,8 @@ header{
 .search-bar::placeholder{color:rgba(235,255,240,.8)}
 .search-bar:focus{box-shadow:inset 0 0 0 2px var(--accent2),0 0 16px rgba(61,183,255,.45)}
 .random-button{
-  /* Tamaño y legibilidad */
-  height:68px;
-  padding:0 22px;
-  font-size:clamp(18px,6.2vw,28px);
-  line-height:1;
-  font-weight:1000;
-  letter-spacing:.8px;
-  text-transform:uppercase;
-  color:#062017;
-
-  /* Estilo visual */
-  border:none;
-  border-radius:18px;
-  background:linear-gradient(90deg,#00ffa9 0%, #38f1c1 40%, #a9ffdf 100%);
-  box-shadow:
-    0 10px 24px rgba(0,0,0,.35),
-    inset 0 0 0 1.5px rgba(255,255,255,.25),
-    0 0 28px rgba(0,255,169,.35);
-
-  /* Interacciones */
-  cursor:pointer;
-  transform:translateZ(0);
-  transition:transform .12s ease, box-shadow .15s ease, filter .15s ease;
-
-  /* Para el brillo animado */
-  position:relative;
-  overflow:hidden;
+  height:56px;border-radius:16px;padding:0 16px;font-weight:900;letter-spacing:.5px;border:none;cursor:pointer;color:#062017;
+  background:linear-gradient(90deg,var(--accent1),#a9ffdf)
 }
 .contact-info{display:flex;flex-direction:row;align-items:center;gap:10px;margin-left:auto}
 .contact-info p{margin:0;font-size:12px;color:#e5ffe8;font-weight:800;letter-spacing:.2px}
@@ -746,4 +721,3 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   </script>
 </body>
 </html>
-
