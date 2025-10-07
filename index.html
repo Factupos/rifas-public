@@ -181,6 +181,7 @@ body.search-has-text *{ transition:none !important; }
   border:1px solid rgba(255,255,255,.18);
   box-shadow:0 20px 60px rgba(0,0,0,.55);
   padding:20px 18px; text-align:center;
+  transform-origin:center center;
 }
 .q{margin:0 0 10px 0;font-size:clamp(18px,5vw,22px);font-weight:900}
 .actions{display:flex;gap:10px;justify-content:center}
@@ -260,7 +261,7 @@ const GID_RAFFLES = '1661037065';
 const GID_CONFIG  = '856149436';
 const PROXY = 'https://csv-proxy.jeisendigital.workers.dev/?u=';
 
-/*** ======= CSV helpers ======= ***/
+/*** ======= CSV helpers ======= */
 const csvUrls = (gid) => {
   const ts = Date.now();
   return [
@@ -284,7 +285,7 @@ async function fetchCsvAny(gid){
   throw lastErr || new Error('No se pudo obtener CSV');
 }
 
-/*** ======= Estado ======= ***/
+/*** ======= Estado ======= */
 let ALL = {};
 let DAILY = [];
 let SEARCH_INPUT = null;
@@ -370,44 +371,372 @@ function extractColombiaDigits(raw){
   return null;
 }
 
-/*** ======= UI ======= */
-function confirmNum(n){
-  const ov  = document.getElementById("ov");
-  const box = document.getElementById("box");
-  const yes = document.getElementById("yes");
-  const no  = document.getElementById("no");
-  const q   = document.getElementById("q");
+/*** ======= Canvas helpers ======= */
+function overlayCanvas(container){
+  if (!container) return null;
+  const cs = getComputedStyle(container);
+  if (cs.position === 'static') container.style.position = 'relative';
+  const rect = container.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const c = document.createElement('canvas');
+  const w = Math.max(1, Math.floor(rect.width * dpr));
+  const h = Math.max(1, Math.floor(rect.height * dpr));
+  c.width = w; c.height = h;
+  c.style.width = rect.width + 'px';
+  c.style.height = rect.height + 'px';
+  c.style.position = 'absolute';
+  c.style.inset = '0';
+  c.style.pointerEvents = 'none';
+  c.style.zIndex = '5';
+  container.appendChild(c);
+  const ctx = c.getContext('2d');
+  return {c, ctx, dpr, w, h, cleanup:()=> c.remove()};
+}
+function fullscreenCanvas(parent){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const c = document.createElement('canvas');
+  const w = Math.max(1, Math.floor(window.innerWidth * dpr));
+  const h = Math.max(1, Math.floor(window.innerHeight * dpr));
+  c.width = w; c.height = h;
+  c.style.width = '100%';
+  c.style.height = '100%';
+  c.style.position = 'absolute';
+  c.style.inset = '0';
+  c.style.pointerEvents = 'none';
+  c.style.zIndex = '1';
+  parent.appendChild(c);
+  const ctx = c.getContext('2d');
+  return {c, ctx, dpr, w, h, cleanup:()=> c.remove()};
+}
+function animateMs(duration, draw){
+  return new Promise(resolve=>{
+    const start = performance.now();
+    let last = start;
+    let rafId = 0;
+    function loop(t){
+      const elapsed = t - start;
+      const dt = Math.min(64, t - last) / 1000;
+      last = t;
+      const p = Math.min(1, elapsed / duration);
+      draw(p, dt, elapsed);
+      if (elapsed < duration) { rafId = requestAnimationFrame(loop); }
+      else { cancelAnimationFrame(rafId); resolve(); }
+    }
+    rafId = requestAnimationFrame(loop);
+  });
+}
+function easeOutCubic(x){ return 1 - Math.pow(1 - x, 3); }
+function hexToRgba(hex, a){
+  const h = hex.replace('#','');
+  const r = parseInt(h.substring(0,2),16);
+  const g = parseInt(h.substring(2,4),16);
+  const b = parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/*** ======= Efecto agua real + chispas ======= */
+function playWaterRipple(container, duration=2000, center){
+  if (!container) return Promise.resolve();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+  const oc = overlayCanvas(container);
+  if (!oc) return Promise.resolve();
+  const {ctx, w, h, dpr, cleanup} = oc;
+  const cx = center?.x ?? (w/2), cy = center?.y ?? (h/2);
+
+  // Chispas mágicas
+  const sparkCols = ['#ffd44d','#00ffa9'];
+  const SPN = Math.floor(24 * Math.min(1.6,(w*h)/60000));
+  const sparks = [];
+  for (let i=0;i<SPN;i++){
+    const ang = Math.random()*Math.PI*2;
+    const sp = (120 + Math.random()*180) * dpr;
+    sparks.push({
+      x:cx, y:cy,
+      vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp - 80*dpr,
+      r:(1 + Math.random()*2) * dpr,
+      life:0, max:0.7 + Math.random()*0.6,
+      col:sparkCols[(Math.random()*sparkCols.length)|0]
+    });
+  }
+
+  // Ondas
+  const maxR = Math.hypot(w,h) * 0.6;
+  const rings = [{delay:0},{delay:140},{delay:290},{delay:450}];
+
+  function drawRing(R, thickness, alpha){
+    if (R<=0 || thickness<=0 || alpha<=0) return;
+    const inner = Math.max(0.0001, R - thickness);
+    const outer = R + thickness;
+    const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+    g.addColorStop(0.00, 'rgba(0,0,0,0)');
+    g.addColorStop(0.20, `rgba(0,0,0,${0.25*alpha})`);
+    g.addColorStop(0.46, `rgba(255,255,255,${0.55*alpha})`);
+    g.addColorStop(0.64, hexToRgba('#00ffa9', 0.65*alpha));
+    g.addColorStop(0.84, hexToRgba('#3db7ff', 0.35*alpha));
+    g.addColorStop(1.00, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,w,h);
+
+    // Destello especular parcial
+    ctx.save();
+    ctx.lineWidth = Math.max(0.8, 3*dpr*(1 - R/maxR));
+    ctx.strokeStyle = `rgba(255,255,255,${0.35*alpha})`;
+    const arcLen = Math.PI * 0.55;
+    const rot = -Math.PI/6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, rot, rot + arcLen);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.globalCompositeOperation = 'source-over';
+  return animateMs(Math.min(2000, duration), (p, dt, ms)=>{
+    ctx.clearRect(0,0,w,h);
+
+    // Oscurecer un poco el tile
+    const dimA = 0.28 * easeOutCubic(Math.min(1, ms/260));
+    ctx.fillStyle = `rgba(0,0,0,${dimA})`;
+    ctx.fillRect(0,0,w,h);
+
+    // Ondas
+    for (let i=0;i<rings.length;i++){
+      const t = ms - rings[i].delay;
+      if (t < 0) continue;
+      const pr = Math.min(1, t / (duration - rings[i].delay + 1));
+      const amp = (1 - pr) * 0.95;
+      const R = pr * maxR;
+      const thick = Math.max(1.5*dpr, 10*dpr*(1 - pr));
+      drawRing(R, thick, amp);
+    }
+
+    // Chispas
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of sparks){
+      s.life += dt;
+      s.vx *= (1 - 0.55*dt);
+      s.vy *= (1 - 0.55*dt);
+      s.vy += 220*dt*dpr*0.25; // pseudo-gravedad
+      s.x += s.vx*dt; s.y += s.vy*dt;
+      const a = Math.max(0, 1 - (s.life / s.max));
+      if (a <= 0) continue;
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(s.col, 0.9*a);
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+      ctx.fill();
+      if (Math.random()<0.08){
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(255,255,255,${0.6*a})`;
+        ctx.arc(s.x, s.y, s.r*0.5, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }).then(cleanup);
+}
+
+/*** ======= Estela brillante (cometa) del tile al modal ======= */
+async function drawTrailFromTileToBox(tile, box, ov, duration=650){
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const fs = fullscreenCanvas(ov); if (!fs) return;
+  const {ctx, w, h, dpr, cleanup} = fs;
+
+  // Coordenadas en CSS px
+  const tr = tile.getBoundingClientRect();
+  const br = box.getBoundingClientRect();
+  const sx = (tr.left + tr.width/2) * dpr;
+  const sy = (tr.top  + tr.height/2) * dpr;
+  const ex = (br.left + br.width/2) * dpr;
+  const ey = (br.top  + br.height/2) * dpr;
+
+  // Control para curva (ligero arco hacia arriba)
+  const ctrl = { x: (sx + ex)/2, y: Math.min(sy, ey) - 120*dpr };
+
+  // Partículas en la cabeza del cometa
+  const sparks = [];
+  function addSpark(px, py){
+    sparks.push({
+      x:px, y:py,
+      vx:(Math.random()-0.5)*120*dpr,
+      vy:(Math.random()-0.8)*160*dpr,
+      life:0, max:0.35+Math.random()*0.25,
+      r:(0.8+Math.random()*1.8)*dpr,
+      col: Math.random()<0.5 ? '#ffd44d' : '#00ffa9'
+    });
+  }
+
+  // Animación
+  await animateMs(duration, (p, dt)=>{
+    ctx.clearRect(0,0,w,h);
+
+    // Progreso suavizado
+    const t = easeOutCubic(p);
+
+    // Punto actual sobre la curva cuadrática
+    const x = (1-t)*(1-t)*sx + 2*(1-t)*t*ctrl.x + t*t*ex;
+    const y = (1-t)*(1-t)*sy + 2*(1-t)*t*ctrl.y + t*t*ey;
+
+    // Grosor y halo decreciente
+    const base = Math.max(2*dpr, 10*dpr*(1-p));
+    const grd = ctx.createLinearGradient(x, y, sx, sy);
+    grd.addColorStop(0, 'rgba(255,255,255,0.85)');
+    grd.addColorStop(0.2, 'rgba(255,212,77,0.75)');
+    grd.addColorStop(1, 'rgba(0,255,169,0.0)');
+
+    // Dibujar trayectoria hasta el punto actual
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowBlur = 20*dpr;
+    ctx.shadowColor = 'rgba(255,212,77,0.55)';
+    ctx.strokeStyle = grd;
+    ctx.lineWidth = base;
+
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(ctrl.x, ctrl.y, x, y);
+    ctx.stroke();
+
+    // Cabeza del cometa
+    ctx.shadowBlur = 30*dpr;
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.arc(x, y, base*0.38, 0, Math.PI*2);
+    ctx.fill();
+
+    // Estela secundaria verde
+    ctx.shadowColor = 'rgba(0,255,169,0.55)';
+    ctx.strokeStyle = 'rgba(0,255,169,0.45)';
+    ctx.lineWidth = base*0.55;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(ctrl.x, ctrl.y, x, y);
+    ctx.stroke();
+    ctx.restore();
+
+    // Chispitas en la cabeza
+    addSpark(x, y);
+    // actualizar chispas
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i=sparks.length-1;i>=0;i--){
+      const s = sparks[i];
+      s.life += dt;
+      s.vx *= (1 - 0.5*dt);
+      s.vy += 200*dt*dpr*0.3;
+      s.x += s.vx*dt; s.y += s.vy*dt;
+      const a = Math.max(0, 1 - s.life/s.max);
+      if (a<=0){ sparks.splice(i,1); continue; }
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(s.col.replace('#',''), 0.9*a); // no exacto, pero mantenemos formato
+      // corregir: convertimos manualmente
+      ctx.fillStyle = s.col === '#ffd44d' ? `rgba(255,212,77,${0.9*a})` : `rgba(0,255,169,${0.9*a})`;
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  });
+
+  cleanup();
+}
+
+/*** ======= Modal desde la boleta con salto + estela ======= */
+function showChoiceFromTile(tile, n){
+  const ov  = document.getElementById('ov');
+  const box = document.getElementById('box');
+  const yes = document.getElementById('yes');
+  const no  = document.getElementById('no');
+  const q   = document.getElementById('q');
   if(!ov || !box || !yes || !no || !q){ return; }
+
   MODAL_OPEN = true;
   q.textContent = "¿Quieres separar este número? " + n;
-  box.style.display = "block";
-  ov.classList.add("show");
-  ov.setAttribute("aria-hidden","false");
-  yes.onclick = (e)=>{ e.preventDefault(); e.stopPropagation(); closeBox(); openWA(n); };
-  no.onclick  = (e)=>{ e.preventDefault(); e.stopPropagation(); closeBox(); };
-  ov.onclick  = ()=> closeBox();
+
+  // Mostrar overlay centrado
+  ov.classList.add('show');
+  ov.setAttribute('aria-hidden','false');
+
+  // Preparar animación desde la boleta
+  box.style.opacity = '0';
+  box.style.transform = 'translate(0,0) scale(1)';
+  box.style.willChange = 'transform,opacity';
+
+  requestAnimationFrame(async ()=>{
+    const tr = tile.getBoundingClientRect();
+    const br = box.getBoundingClientRect();
+    const tx = tr.left + tr.width/2;
+    const ty = tr.top  + tr.height/2;
+    const bx = br.left + br.width/2;
+    const by = br.top  + br.height/2;
+    const dx = tx - bx;
+    const dy = ty - by;
+
+    // Estela brillante sincronizada con el salto
+    drawTrailFromTileToBox(tile, box, ov, 650).catch(()=>{});
+
+    // Fondo del overlay
+    const a2 = ov.animate([
+      { backgroundColor:'rgba(0,0,0,0)' },
+      { backgroundColor:'rgba(0,0,0,0.4)' }
+    ], { duration: 420, easing:'ease-out', fill:'forwards' });
+
+    // Salto con rebote sutil
+    const kf = [
+      { transform:`translate(${dx}px,${dy}px) scale(0.25)`, opacity:0 },
+      { transform:`translate(${dx*0.12}px,${dy*0.12}px) scale(1.08)`, opacity:1, offset:0.72 },
+      { transform:'translate(0,0) scale(1)', opacity:1 }
+    ];
+    const a1 = box.animate(kf, { duration:650, easing:'cubic-bezier(.15,.9,.2,1)', fill:'forwards' });
+
+    a1.onfinish = ()=>{ box.style.opacity='1'; box.style.transform='none'; box.style.willChange='auto'; };
+  });
+
+  yes.onclick = (e)=>{ e.preventDefault(); e.stopPropagation(); closeBox(true); openWA(n); };
+  no.onclick  = (e)=>{ e.preventDefault(); e.stopPropagation(); closeBox(false); };
+  ov.onclick  = ()=> closeBox(false);
   box.onclick = (e)=> e.stopPropagation();
-  setTimeout(()=>{ try{ yes.focus(); }catch(_){} }, 0);
 }
-function closeBox(){
-  const ov  = document.getElementById("ov");
-  const box = document.getElementById("box");
-  MODAL_OPEN = false;
-  if(ov){ ov.classList.remove("show"); ov.setAttribute("aria-hidden","true"); }
-  if(box){ box.style.display = "block"; }
+
+function closeBox(withScale){
+  const ov  = document.getElementById('ov');
+  const box = document.getElementById('box');
+  if(!ov || !box) return;
+  const a1 = box.animate(withScale ? [
+    { transform:'scale(1)', opacity:1 },
+    { transform:'scale(.92)', opacity:0 }
+  ] : [
+    { opacity:1 }, { opacity:0 }
+  ], { duration:220, easing:'ease-in', fill:'forwards' });
+  const a2 = ov.animate([
+    { backgroundColor:'rgba(0,0,0,0.4)' },
+    { backgroundColor:'rgba(0,0,0,0)' }
+  ], { duration:220, fill:'forwards' });
+  Promise.all([a1.finished, a2.finished]).catch(()=>{}).finally(()=>{
+    MODAL_OPEN=false;
+    ov.classList.remove('show');
+    ov.setAttribute('aria-hidden','true');
+    box.style.opacity='1';
+    box.style.transform='none';
+    ov.style.backgroundColor='rgba(0,0,0,0.4)';
+  });
 }
+
 function openWA(number){
   const tel = window.__CONFIG_PHONE_DIGITS || '573206413635';
   const message = "Hola, estoy interesado en separar este número: " + number;
   const url = "https://wa.me/" + tel + "?text=" + encodeURIComponent(message);
   const w = window.open(url, '_blank'); if (!w){ location.href = url; }
 }
+
+/*** ======= UI: tiles ======= */
 function makeTile(num, large){
   const el = document.createElement('div');
   el.className = 'raffle' + (large ? ' large-raffle' : '');
   el.innerHTML = `<span>${num}</span>`;
-  el.addEventListener('click', ()=> onTileTap(el, num), {passive:true});
-  el.addEventListener('pointerdown', ()=>{}, {passive:true});
+
+  // Guardar punto exacto del toque/click para el origen del agua
+  el.addEventListener('pointerdown', (ev)=>{ el._lastPt = {x:ev.clientX, y:ev.clientY}; }, {passive:true});
+  el.addEventListener('touchstart', (ev)=>{ const t=ev.touches&&ev.touches[0]; if(t) el._lastPt={x:t.clientX,y:t.clientY}; }, {passive:true});
+  el.addEventListener('click', (ev)=> onTileTap(el, num, el._lastPt || {x:ev.clientX, y:ev.clientY}), {passive:true});
+
   return el;
 }
 function renderGrid(){
@@ -539,174 +868,24 @@ async function rerenderSearch(){
   }
 }
 
-/* ========= EFECTO NUEVO: AGUA REAL + CHISPAS ========= */
-function overlayCanvas(container){
-  if (!container) return null;
-  const cs = getComputedStyle(container);
-  if (cs.position === 'static') container.style.position = 'relative';
-  const rect = container.getBoundingClientRect();
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const c = document.createElement('canvas');
-  const w = Math.max(1, Math.floor(rect.width * dpr));
-  const h = Math.max(1, Math.floor(rect.height * dpr));
-  c.width = w; c.height = h;
-  c.style.width = rect.width + 'px';
-  c.style.height = rect.height + 'px';
-  c.style.position = 'absolute';
-  c.style.inset = '0';
-  c.style.pointerEvents = 'none';
-  c.style.zIndex = '5';
-  container.appendChild(c);
-  const ctx = c.getContext('2d');
-  return {c, ctx, dpr, w, h, cleanup:()=> c.remove()};
-}
-function animateMs(duration, draw){
-  return new Promise(resolve=>{
-    const start = performance.now();
-    let last = start;
-    let rafId = 0;
-    function loop(t){
-      const elapsed = t - start;
-      const dt = Math.min(64, t - last) / 1000;
-      last = t;
-      const p = Math.min(1, elapsed / duration);
-      draw(p, dt, elapsed);
-      if (elapsed < duration) { rafId = requestAnimationFrame(loop); }
-      else { cancelAnimationFrame(rafId); resolve(); }
-    }
-    rafId = requestAnimationFrame(loop);
-  });
-}
-function easeOutCubic(x){ return 1 - Math.pow(1 - x, 3); }
-function hexToRgba(hex, a){
-  const h = hex.replace('#','');
-  const r = parseInt(h.substring(0,2),16);
-  const g = parseInt(h.substring(2,4),16);
-  const b = parseInt(h.substring(4,6),16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-/* Ondas con cresta/luz y valle/sombra + oscurecimiento del tile + chispas */
-function playWaterRipple(container, duration=2000, center){
-  if (!container) return Promise.resolve();
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
-  const oc = overlayCanvas(container);
-  if (!oc) return Promise.resolve();
-  const {ctx, w, h, dpr, cleanup} = oc;
-  const cx = center?.x ?? (w/2), cy = center?.y ?? (h/2);
-
-  // Chispas mágicas
-  const sparkCols = ['#ffd44d','#00ffa9'];
-  const SPN = Math.floor(24 * Math.min(1.6,(w*h)/60000));
-  const sparks = [];
-  for (let i=0;i<SPN;i++){
-    const ang = Math.random()*Math.PI*2;
-    const sp = (120 + Math.random()*180) * dpr;
-    sparks.push({
-      x:cx, y:cy,
-      vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp - 80*dpr,
-      r:(1 + Math.random()*2) * dpr,
-      life:0, max:0.7 + Math.random()*0.6,
-      col:sparkCols[(Math.random()*sparkCols.length)|0]
-    });
-  }
-
-  // Config de ondas
-  const maxR = Math.hypot(w,h) * 0.6;
-  const rings = [
-    {delay:0},
-    {delay:140},
-    {delay:290},
-    {delay:450}
-  ];
-
-  // Dibuja un anillo con gradiente de cresta/valle
-  function drawRing(R, thickness, alpha){
-    if (R<=0 || thickness<=0 || alpha<=0) return;
-    const inner = Math.max(0.0001, R - thickness);
-    const outer = R + thickness;
-    const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
-    // valle (ligera sombra), cresta brillante, color neón, desvanecer
-    g.addColorStop(0.00, 'rgba(0,0,0,0)');
-    g.addColorStop(0.20, `rgba(0,0,0,${0.25*alpha})`);
-    g.addColorStop(0.46, `rgba(255,255,255,${0.55*alpha})`);
-    g.addColorStop(0.64, hexToRgba('#00ffa9', 0.65*alpha));
-    g.addColorStop(0.84, hexToRgba('#3db7ff', 0.35*alpha));
-    g.addColorStop(1.00, 'rgba(0,0,0,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,w,h);
-
-    // Destello especular parcial para realismo
-    ctx.save();
-    ctx.lineWidth = Math.max(0.8, 3*dpr*(1 - R/maxR));
-    ctx.strokeStyle = `rgba(255,255,255,${0.35*alpha})`;
-    const arcLen = Math.PI * 0.55;
-    const rot = -Math.PI/6;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, rot, rot + arcLen);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  ctx.globalCompositeOperation = 'source-over';
-  return animateMs(Math.min(2000, duration), (p, dt, ms)=>{
-    ctx.clearRect(0,0,w,h);
-
-    // Oscurecer el cuadro según progreso (sensación de profundidad)
-    const dimA = 0.28 * easeOutCubic(Math.min(1, ms/260));
-    ctx.fillStyle = `rgba(0,0,0,${dimA})`;
-    ctx.fillRect(0,0,w,h);
-
-    // Ondas (varias con delays)
-    for (let i=0;i<rings.length;i++){
-      const t = ms - rings[i].delay;
-      if (t < 0) continue;
-      const pr = Math.min(1, t / (duration - rings[i].delay + 1));
-      const amp = (1 - pr) * 0.95;               // amplitud decae
-      const R = pr * maxR;
-      const thick = Math.max(1.5*dpr, 10*dpr*(1 - pr)); // grosor se afina
-      drawRing(R, thick, amp);
-    }
-
-    // Chispas doradas + verde neón
-    ctx.globalCompositeOperation = 'lighter';
-    for (const s of sparks){
-      s.life += dt;
-      s.vx *= (1 - 0.55*dt);
-      s.vy *= (1 - 0.55*dt);
-      s.vy += 220*dt*dpr*0.25; // pseudo-gravedad
-      s.x += s.vx*dt; s.y += s.vy*dt;
-      const a = Math.max(0, 1 - (s.life / s.max));
-      if (a <= 0) continue;
-      ctx.beginPath();
-      ctx.fillStyle = hexToRgba(s.col, 0.9*a);
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
-      ctx.fill();
-      if (Math.random()<0.08){ // highlight puntual
-        ctx.beginPath();
-        ctx.fillStyle = `rgba(255,255,255,${0.6*a})`;
-        ctx.arc(s.x, s.y, s.r*0.5, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
-    ctx.globalCompositeOperation = 'source-over';
-  }).then(cleanup);
-}
-
-/* Tap de boleta: NUEVO efecto agua + chispas (2s) y luego confirmar */
-function onTileTap(el, num){
+/*** ======= Tap de boleta: agua real + salto con estela ======= */
+function onTileTap(el, num, pt){
   if (!el || el.dataset.busy === '1') return;
   el.dataset.busy = '1';
   hideMsg();
+
   const rect = el.getBoundingClientRect();
   const dpr = Math.min(window.devicePixelRatio||1, 2);
-  const center = { x: (rect.width*dpr)/2, y: (rect.height*dpr)/2 };
-  playWaterRipple(el, 2000, center).then(()=>{
+  const cx = ((pt?.x ?? (rect.left+rect.width/2)) - rect.left) * dpr;
+  const cy = ((pt?.y ?? (rect.top+rect.height/2)) - rect.top)  * dpr;
+
+  // 2s de agua real y luego modal con salto + estela
+  playWaterRipple(el, 2000, {x:cx, y:cy}).then(()=>{
     el.dataset.busy = '';
-    confirmNum(num);
+    showChoiceFromTile(el, num);
   }).catch(()=>{
     el.dataset.busy = '';
-    confirmNum(num);
+    showChoiceFromTile(el, num);
   });
 }
 
@@ -753,7 +932,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     }
   });
 
-  // Botón ALEATORIO con efecto mágico existente
+  // Botón ALEATORIO (mantiene tu efecto mágico)
   const randomBtn = document.getElementById('randomButton');
   randomBtn.addEventListener('click', async function() {
     if (randomBtn.dataset.busy === '1') return;
@@ -776,13 +955,13 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 
     document.body.classList.add('search-has-text');
 
-    // placeholder para el efecto sorpresa (ya existente de tu versión previa)
+    // placeholder del efecto
     const placeholder = document.createElement('div');
     placeholder.className = 'raffle large-raffle';
     layer.appendChild(placeholder);
     layer.style.display = 'flex';
 
-    // Reusa el efecto mágico previo (ráfaga) para el aleatorio:
+    // Ráfaga mágica compacta (1.8s)
     await (async function playMagicBurst(container, duration=1800){
       if (!container) return;
       if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -824,7 +1003,10 @@ document.addEventListener('DOMContentLoaded', async ()=>{
           const alpha = Math.max(0, 1 - (pt.life/pt.max));
           if (alpha <= 0) continue;
           ctx.beginPath();
-          ctx.fillStyle = hexToRgba(pt.col, alpha);
+          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+          if (pt.col === '#ffd44d') ctx.fillStyle = `rgba(255,212,77,${alpha})`;
+          if (pt.col === '#00ffa9') ctx.fillStyle = `rgba(0,255,169,${alpha})`;
+          if (pt.col === '#3db7ff') ctx.fillStyle = `rgba(61,183,255,${alpha})`;
           ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI*2);
           ctx.fill();
           if (Math.random()<0.08){
