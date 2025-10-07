@@ -193,6 +193,16 @@ body.search-has-text *{ transition:none !important; }
   background:linear-gradient(90deg,#ff6b6b,#ffd0d0);color:#1a0606;
 }
 
+/* Animación suave al revelar el número tras el efecto mágico */
+.raffle.revealed span{
+  animation:revealPop .9s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes revealPop{
+  0%{ transform:scale(.82); filter:brightness(1.4); text-shadow:0 0 26px rgba(255,255,255,.65),0 0 40px rgba(0,255,169,.35) }
+  60%{ transform:scale(1.06) }
+  100%{ transform:scale(1); filter:none }
+}
+
 @media(max-width:768px){
   header{gap:8px;padding:12px 10px}
   .contact-info{flex-direction:row;flex-wrap:wrap;justify-content:center}
@@ -244,13 +254,11 @@ body.search-has-text *{ transition:none !important; }
   <div id="loadingMessage" class="loading-message">Buscando número aleatorio...</div>
 
   <script>
-/*** ======= CONFIG ======= ***/
 const KEY = '1MyOkJrGpeY1ZXQVFq_srndALEh6Nzzir8sFSfu-0EVM';
-const GID_RAFFLES = '1661037065';     // Hoja: Numero_De_Rifas (A=Numero, B=Asignado/Libre)
-const GID_CONFIG  = '856149436';      // Hoja: Config_Publica
-const PROXY = 'https://csv-proxy.jeisendigital.workers.dev/?u='; // tu Worker
+const GID_RAFFLES = '1661037065';
+const GID_CONFIG  = '856149436';
+const PROXY = 'https://csv-proxy.jeisendigital.workers.dev/?u=';
 
-/*** ======= CSV endpoints (fallback) ======= ***/
 const csvUrls = (gid) => {
   const ts = Date.now();
   return [
@@ -274,18 +282,16 @@ async function fetchCsvAny(gid){
   throw lastErr || new Error('No se pudo obtener CSV');
 }
 
-/*** ======= Estado global ======= ***/
-let ALL = {};             // { "0000": "libre" | "ocupado" }
-let DAILY = [];           // hasta 400 libres del día (estable)
+let ALL = {};
+let DAILY = [];
 let SEARCH_INPUT = null;
 let GRID_TIMER = null;
 let MAP_TIMER = null;
 let MODAL_OPEN = false;
-let DAY_MARK = null;      // YYYY-MM-DD del último sorteo diario
+let DAY_MARK = null;
 
-/*** ======= Utilidades ======= */
 const pad4 = n => String(n).replace(/\D/g,'').slice(0,4).padStart(4,'0');
-const todayKey = () => new Date().toISOString().slice(0,10); // YYYY-MM-DD
+const todayKey = () => new Date().toISOString().slice(0,10);
 function randInt(maxExclusive){
   if (window.crypto && window.crypto.getRandomValues){
     const b = new Uint32Array(1);
@@ -309,7 +315,6 @@ function hideMsg(){
   clearTimeout(msg._t);
   el.style.display = 'none';
 }
-// CSV-parser
 function parseCSV(text){
   if (text.trimStart().startsWith('<')) return [];
   const rows = [];
@@ -327,7 +332,7 @@ function parseCSV(text){
       if (c === '"'){ inQ=true; }
       else if (c === ','){ push(); }
       else if (c === '\n'){ push(); rows.push([]); }
-      else if (c === '\r'){ /* skip */ }
+      else if (c === '\r'){ }
       else cur+=c;
     }
     i++;
@@ -336,7 +341,6 @@ function parseCSV(text){
   return rows.filter(r => r.some(x=>String(x).trim()!=='')); 
 }
 
-/*** ======= Base 0000–9999 (ocupado por defecto) ======= */
 function makeBaseMap(){
   const map = {};
   for (let i=0;i<10000;i++){
@@ -345,36 +349,26 @@ function makeBaseMap(){
   return map;
 }
 
-/*** ======= Normalización (solo col B) ======= */
-// Columna B: "Libre" o "Asignado". Vacío => OCUPADO
 function normStatusAB(s){
   const t = String(s ?? '').trim().toLowerCase();
   if (t === 'libre') return 'libre';
-  return 'ocupado'; // asignado o vacío = ocupado
+  return 'ocupado';
 }
 
-/*** ======= Teléfono: normalizador a E.164 CO ======= */
 function extractColombiaDigits(raw){
-  // Junta dígitos, quita prefijo 00 si viene como 0057..., etc.
   const chunks = (String(raw||'').match(/\d+/g) || []);
   let d = chunks.join('');
-  d = d.replace(/^00/, ''); // 0057 -> 57...
-  // Caso ideal: 57 + (3xxxxxxxxx)
+  d = d.replace(/^00/, '');
   const m = d.match(/57(3\d{9})/);
   if (m) return '57' + m[1];
-  // Móvil de 10 dígitos empezando por 3
   const m2 = d.match(/(?:^|[^0-9])(3\d{9})(?:[^0-9]|$)/);
   if (m2) return '57' + m2[1];
-  // 0 + móvil (03xxxxxxxxx)
   const m3 = d.match(/0(3\d{9})/);
   if (m3) return '57' + m3[1];
-  // Si ya empieza por 57 y tiene al menos 12 dígitos, toma los 12 primeros
   if (d.startsWith('57') && d.length >= 12) return d.slice(0, 12);
-  // Sin coincidencias válidas
   return null;
 }
 
-/*** ======= UI helpers ======= */
 function confirmNum(n){
   const ov  = document.getElementById("ov");
   const box = document.getElementById("box");
@@ -401,18 +395,17 @@ function closeBox(){
   if(box){ box.style.display = "block"; }
 }
 function openWA(number){
-  // Usa el teléfono normalizado (con 57) o fallback fijo
   const tel = window.__CONFIG_PHONE_DIGITS || '573206413635';
   const message = "Hola, estoy interesado en separar este número: " + number;
-  // Formato recomendado por WhatsApp: sin '+' y solo dígitos
   const url = "https://wa.me/" + tel + "?text=" + encodeURIComponent(message);
   const w = window.open(url, '_blank'); if (!w){ location.href = url; }
 }
+
 function makeTile(num, large){
   const el = document.createElement('div');
   el.className = 'raffle' + (large ? ' large-raffle' : '');
   el.innerHTML = `<span>${num}</span>`;
-  el.addEventListener('click', ()=> confirmNum(num), {passive:true});
+  el.addEventListener('click', ()=> onTileTap(el, num), {passive:true});
   el.addEventListener('pointerdown', ()=>{}, {passive:true});
   return el;
 }
@@ -428,8 +421,10 @@ function renderSearchOne(num){
   layer.style.display = 'none';
   layer.innerHTML = '';
   if (!num) return;
-  layer.appendChild(makeTile(num, true));
+  const t = makeTile(num, true);
+  layer.appendChild(t);
   layer.style.display = 'flex';
+  requestAnimationFrame(()=> t.classList.add('revealed'));
 }
 function clearSearchLayer(){
   const layer = document.getElementById('searchResult');
@@ -437,7 +432,6 @@ function clearSearchLayer(){
   layer.innerHTML = '';
 }
 
-/*** ======= Carga de CONFIG ======= */
 async function loadConfig(){
   try{
     const txt = await fetchCsvAny(GID_CONFIG);
@@ -456,13 +450,11 @@ async function loadConfig(){
     document.getElementById('address').textContent = address ? ('Dir: ' + address) : '';
     document.getElementById('logoImg').src = String(logo || '').trim();
 
-    // Guarda ambos: original para mostrar y dígitos normalizados para WhatsApp
     window.__CONFIG_PHONE = phoneRaw || '';
     window.__CONFIG_PHONE_DIGITS = extractColombiaDigits(phoneRaw) || '573206413635';
   }catch(e){ console.warn('Config error', e); }
 }
 
-/*** ======= Persistencia/Selección diaria ======= */
 function persistDaily(){
   const key = 'daily_' + todayKey();
   try { localStorage.setItem(key, JSON.stringify(DAILY || [])); } catch(_){}
@@ -472,7 +464,7 @@ function loadDailyFromCache(){
   try{
     const cached = JSON.parse(localStorage.getItem(key) || '[]');
     if (Array.isArray(cached) && cached.length){
-      DAILY = cached.filter(n => ALL[n] === 'libre'); // mantener los que sigan libres
+      DAILY = cached.filter(n => ALL[n] === 'libre');
       persistDaily();
       return DAILY.length > 0;
     }
@@ -490,7 +482,6 @@ function pickDaily(force=false){
   persistDaily();
 }
 
-/*** ======= Carga MAPA (solo columnas A/B) ======= */
 async function syncMap(){
   try{
     const txt = await fetchCsvAny(GID_RAFFLES);
@@ -499,8 +490,8 @@ async function syncMap(){
     const map = makeBaseMap();
     for (let i=1;i<rows.length;i++){
       const r = rows[i] || [];
-      const a = (r[0] ?? '').toString().trim(); // Col A
-      const b = (r[1] ?? '').toString().trim(); // Col B
+      const a = (r[0] ?? '').toString().trim();
+      const b = (r[1] ?? '').toString().trim();
       if (!a) continue;
       let digits = a.replace(/\D/g,'');
       if (!digits) continue;
@@ -510,39 +501,30 @@ async function syncMap(){
     }
     ALL = map;
 
-    // Mantener DAILY estable: solo quitar los que se ocupen
     const before = DAILY.length;
     DAILY = (DAILY || []).filter(n => ALL[n] === 'libre');
     if (DAILY.length !== before) persistDaily();
   }catch(e){ console.warn('syncMap error', e); }
 }
 
-/*** ======= Buscar exacto ======= */
 async function rerenderSearch(){
   const layer = document.getElementById('searchResult');
-
-  hideMsg(); // limpia cartel previo
-
+  hideMsg();
   const raw = (SEARCH_INPUT.value || '').replace(/\D/g,'').slice(0,4);
   if (SEARCH_INPUT.value !== raw) SEARCH_INPUT.value = raw;
-
   layer.style.display = 'none';
   layer.innerHTML = '';
-
   if (raw.length === 0){
     document.body.classList.remove('search-has-text');
     return;
   }
   document.body.classList.add('search-has-text');
-
   if (!ALL || !Object.keys(ALL).length){
     await syncMap();
     if (!ALL || !Object.keys(ALL).length){ msg('Sin conexión o datos.', true); return; }
   }
-
   const padded = pad4(raw);
   const st = ALL[padded] || 'ocupado';
-
   if (st === 'libre'){
     hideMsg();
     renderSearchOne(padded);
@@ -552,7 +534,191 @@ async function rerenderSearch(){
   }
 }
 
-/*** ======= Init ======= */
+/* ====== EFECTOS VISUALES (Canvas optimizado) ====== */
+function overlayCanvas(container){
+  if (!container) return null;
+  const cs = getComputedStyle(container);
+  if (cs.position === 'static') container.style.position = 'relative';
+  const rect = container.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const c = document.createElement('canvas');
+  const w = Math.max(1, Math.floor(rect.width * dpr));
+  const h = Math.max(1, Math.floor(rect.height * dpr));
+  c.width = w; c.height = h;
+  c.style.width = rect.width + 'px';
+  c.style.height = rect.height + 'px';
+  c.style.position = 'absolute';
+  c.style.inset = '0';
+  c.style.pointerEvents = 'none';
+  c.style.zIndex = '5';
+  container.appendChild(c);
+  const ctx = c.getContext('2d');
+  return {c, ctx, dpr, w, h, cleanup:()=> c.remove()};
+}
+
+function animateMs(duration, draw){
+  return new Promise(resolve=>{
+    const start = performance.now();
+    let last = start;
+    let rafId = 0;
+    function loop(t){
+      const elapsed = t - start;
+      const dt = Math.min(64, t - last) / 1000;
+      last = t;
+      const p = Math.min(1, elapsed / duration);
+      draw(p, dt, elapsed);
+      if (elapsed < duration) { rafId = requestAnimationFrame(loop); }
+      else { cancelAnimationFrame(rafId); resolve(); }
+    }
+    rafId = requestAnimationFrame(loop);
+  });
+}
+
+function playMagicBurst(container, duration=1800){
+  if (!container) return Promise.resolve();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+  const oc = overlayCanvas(container);
+  if (!oc) return Promise.resolve();
+  const {c, ctx, dpr, w, h, cleanup} = oc;
+  const cx = w/2, cy = h/2;
+  const colors = ['#ffd44d','#00ffa9','#3db7ff','#ffffff'];
+  const N = Math.floor(Math.min(140, 80 + (w*h)/40000));
+  const parts = [];
+  for (let i=0;i<N;i++){
+    const ang = Math.random()*Math.PI*2;
+    const sp = (80 + Math.random()*220) * dpr;
+    const r = 1.6 + Math.random()*2.6;
+    parts.push({
+      x:cx, y:cy,
+      vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp,
+      life:0, max:0.9+Math.random()*0.7,
+      r:r*dpr, col:colors[(Math.random()*colors.length)|0]
+    });
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  return animateMs(Math.min(3000, duration), (p, dt)=>{
+    ctx.clearRect(0,0,w,h);
+    const glow = ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(w,h)*0.45);
+    glow.addColorStop(0, 'rgba(255,255,255,0.18)');
+    glow.addColorStop(0.35, 'rgba(0,255,169,0.12)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(cx,cy,Math.max(w,h)*0.45,0,Math.PI*2); ctx.fill();
+
+    const ringR = (Math.max(w,h)*0.55) * Math.sin(p*Math.PI);
+    const alphaRing = (1 - p) * 0.9;
+    ctx.lineWidth = Math.max(1, 6*dpr*(1-p));
+    ctx.strokeStyle = `rgba(255,212,77,${alphaRing})`;
+    ctx.beginPath(); ctx.arc(cx,cy,Math.max(0,ringR*0.65),0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = `rgba(0,255,169,${alphaRing*0.85})`;
+    ctx.beginPath(); ctx.arc(cx,cy,Math.max(0,ringR*0.45),0,Math.PI*2); ctx.stroke();
+
+    for (const pt of parts){
+      pt.life += dt;
+      pt.vx *= (1 - 0.8*dt);
+      pt.vy *= (1 - 0.8*dt);
+      pt.vy += 260*dt*dpr*0.25;
+      pt.x += pt.vx*dt;
+      pt.y += pt.vy*dt;
+      const alpha = Math.max(0, 1 - (pt.life/pt.max));
+      if (alpha <= 0) continue;
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(pt.col, alpha);
+      ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI*2);
+      ctx.fill();
+      if (Math.random()<0.08){
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(255,255,255,'+(alpha*0.8)+')';
+        ctx.arc(pt.x, pt.y, pt.r*0.5, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }).then(()=> cleanup());
+}
+
+function playRippleSparkle(container, duration=1200, center){
+  if (!container) return Promise.resolve();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+  const oc = overlayCanvas(container);
+  if (!oc) return Promise.resolve();
+  const {c, ctx, dpr, w, h, cleanup} = oc;
+  const cx = center?.x ?? (w/2), cy = center?.y ?? (h/2);
+  const colors = ['#ffd44d','#00ffa9'];
+  const rings = [
+    {delay:0},
+    {delay:120},
+    {delay:260}
+  ];
+  const N = Math.floor(40 * Math.min(1.5,(w*h)/60000));
+  const parts = [];
+  for (let i=0;i<N;i++){
+    const ang = Math.random()*Math.PI*2;
+    const sp = (90 + Math.random()*140) * dpr;
+    const r = 1.2 + Math.random()*2.2;
+    parts.push({
+      x:cx, y:cy,
+      vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp - 60*dpr,
+      life:0, max:0.8+Math.random()*0.6,
+      r:r, col:colors[(Math.random()*colors.length)|0]
+    });
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  return animateMs(Math.min(2000, duration), (p, dt, ms)=>{
+    ctx.clearRect(0,0,w,h);
+    for (let ri=0; ri<rings.length; ri++){
+      const t = Math.max(0, ms - rings[ri].delay);
+      const pr = Math.min(1, t / Math.min(duration,2000));
+      const R = pr * Math.hypot(w,h) * 0.45;
+      const alpha = (1 - pr) * 0.65;
+      ctx.lineWidth = Math.max(0.5, 5*dpr*(1-pr));
+      ctx.strokeStyle = `rgba(0,255,169,${alpha*0.9})`;
+      ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2); ctx.stroke();
+      ctx.strokeStyle = `rgba(255,212,77,${alpha*0.75})`;
+      ctx.beginPath(); ctx.arc(cx,cy,R*0.82,0,Math.PI*2); ctx.stroke();
+    }
+    for (const pt of parts){
+      pt.life += dt;
+      pt.vx *= (1 - 0.6*dt);
+      pt.vy *= (1 - 0.6*dt);
+      pt.vy += 200*dt*dpr*0.3;
+      pt.x += pt.vx*dt;
+      pt.y += pt.vy*dt;
+      const alpha = Math.max(0, 1 - (pt.life/pt.max));
+      if (alpha <= 0) continue;
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(pt.col, alpha);
+      ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }).then(()=> cleanup());
+}
+
+function hexToRgba(hex, a){
+  const h = hex.replace('#','');
+  const r = parseInt(h.substring(0,2),16);
+  const g = parseInt(h.substring(2,4),16);
+  const b = parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/* Tap de boleta: efecto agua + chispas (2s) y luego confirmar */
+function onTileTap(el, num){
+  if (!el || el.dataset.busy === '1') return;
+  el.dataset.busy = '1';
+  hideMsg();
+  const rect = el.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  const center = { x: (rect.width*dpr)/2, y: (rect.height*dpr)/2 };
+  playRippleSparkle(el, 2000, center).then(()=>{
+    el.dataset.busy = '';
+    confirmNum(num);
+  }).catch(()=>{
+    el.dataset.busy = '';
+    confirmNum(num);
+  });
+}
+
+/* ====== INIT ====== */
 document.addEventListener('DOMContentLoaded', async ()=>{
   function applyViewportOffset(){
     var top = 0;
@@ -595,43 +761,47 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     }
   });
 
-  // Botón ALEATORIO
-  document.getElementById('randomButton').addEventListener('click', async function() {
-    const loading = document.getElementById('loadingMessage');
-    const layer = document.getElementById('searchResult');
+  const randomBtn = document.getElementById('randomButton');
+  randomBtn.addEventListener('click', async function() {
+    if (randomBtn.dataset.busy === '1') return;
+    randomBtn.dataset.busy = '1';
 
-    loading.style.display = 'block';
+    hideMsg();
+    const layer = document.getElementById('searchResult');
     layer.style.display = 'none';
     layer.innerHTML = '';
-    hideMsg();
 
     if (!ALL || !Object.keys(ALL).length){ await syncMap(); }
 
     let chosen = null;
     const libres = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre');
-
     if (libres.length){
       chosen = libres[randInt(libres.length)];
     }else{
       chosen = String(randInt(10000)).padStart(4,'0');
     }
 
-    SEARCH_INPUT.value = String(parseInt(chosen, 10));
     document.body.classList.add('search-has-text');
 
+    const placeholder = document.createElement('div');
+    placeholder.className = 'raffle large-raffle';
+    layer.appendChild(placeholder);
+    layer.style.display = 'flex';
+
+    const effectMs = 1800; /* máx 3s */
+    await playMagicBurst(placeholder, effectMs);
+
     const st = ALL[chosen] || 'ocupado';
+    SEARCH_INPUT.value = String(parseInt(chosen, 10));
     if (st === 'libre'){
-      hideMsg();
       renderSearchOne(chosen);
     }else{
       clearSearchLayer();
       msg('Boleta ocupada', true);
     }
-
-    setTimeout(()=>{ loading.style.display = 'none'; }, 300);
+    randomBtn.dataset.busy = '';
   }, {passive:true});
 
-  // Layout
   updateHeaderPadding();
   applyViewportOffset();
   if (window.visualViewport){
@@ -640,18 +810,15 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   }
   window.addEventListener('resize', ()=> requestAnimationFrame(applyViewportOffset), {passive:true});
 
-  // Carga inicial
   DAY_MARK = todayKey();
   await loadConfig();
   await syncMap();
-  pickDaily(true); // sorteo inicial del día (estable)
+  pickDaily(true);
   renderGrid();
 
-  // Timers (cada 5s)
   GRID_TIMER = setInterval(()=> renderGrid(), 5000);
 
   MAP_TIMER  = setInterval(async ()=>{
-    // 1) si cambió el día -> nuevo sorteo
     const nowKey = todayKey();
     if (nowKey !== DAY_MARK){
       DAY_MARK = nowKey;
@@ -661,7 +828,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
       renderGrid();
       return;
     }
-    // 2) mismo día: solo actualizar estados y encoger DAILY si se ocuparon
     const before = DAILY.length;
     await syncMap();
     if (DAILY.length !== before){
