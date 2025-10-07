@@ -303,7 +303,6 @@ function msg(text, error=false){
   clearTimeout(msg._t);
   msg._t = setTimeout(()=>{ el.style.display = 'none'; }, error ? 2600 : 1400);
 }
-// 🔽 Nuevo helper: ocultar el mensaje inmediatamente
 function hideMsg(){
   const el = document.getElementById('message');
   if (!el) return;
@@ -354,6 +353,27 @@ function normStatusAB(s){
   return 'ocupado'; // asignado o vacío = ocupado
 }
 
+/*** ======= Teléfono: normalizador a E.164 CO ======= */
+function extractColombiaDigits(raw){
+  // Junta dígitos, quita prefijo 00 si viene como 0057..., etc.
+  const chunks = (String(raw||'').match(/\d+/g) || []);
+  let d = chunks.join('');
+  d = d.replace(/^00/, ''); // 0057 -> 57...
+  // Caso ideal: 57 + (3xxxxxxxxx)
+  const m = d.match(/57(3\d{9})/);
+  if (m) return '57' + m[1];
+  // Móvil de 10 dígitos empezando por 3
+  const m2 = d.match(/(?:^|[^0-9])(3\d{9})(?:[^0-9]|$)/);
+  if (m2) return '57' + m2[1];
+  // 0 + móvil (03xxxxxxxxx)
+  const m3 = d.match(/0(3\d{9})/);
+  if (m3) return '57' + m3[1];
+  // Si ya empieza por 57 y tiene al menos 12 dígitos, toma los 12 primeros
+  if (d.startsWith('57') && d.length >= 12) return d.slice(0, 12);
+  // Sin coincidencias válidas
+  return null;
+}
+
 /*** ======= UI helpers ======= */
 function confirmNum(n){
   const ov  = document.getElementById("ov");
@@ -381,9 +401,11 @@ function closeBox(){
   if(box){ box.style.display = "block"; }
 }
 function openWA(number){
-  const tel = (window.__CONFIG_PHONE || '').replace(/\D/g,'') || '573206413635';
+  // Usa el teléfono normalizado (con 57) o fallback fijo
+  const tel = window.__CONFIG_PHONE_DIGITS || '573206413635';
   const message = "Hola, estoy interesado en separar este número: " + number;
-  const url = "https://api.whatsapp.com/send?phone=" + tel + "&text=" + encodeURIComponent(message);
+  // Formato recomendado por WhatsApp: sin '+' y solo dígitos
+  const url = "https://wa.me/" + tel + "?text=" + encodeURIComponent(message);
   const w = window.open(url, '_blank'); if (!w){ location.href = url; }
 }
 function makeTile(num, large){
@@ -399,10 +421,7 @@ function renderGrid(){
   if (!wrap) return;
   if (document.body.classList.contains('search-has-text') || MODAL_OPEN) return;
   wrap.innerHTML = '';
-  DAILY.forEach(n => appendTile(n, wrap));
-}
-function appendTile(n, wrap){
-  wrap.appendChild(makeTile(n, false));
+  DAILY.forEach(n => wrap.appendChild(makeTile(n, false)));
 }
 function renderSearchOne(num){
   const layer = document.getElementById('searchResult');
@@ -428,15 +447,18 @@ async function loadConfig(){
     const hIdx = (name) => head.findIndex(h => String(h).trim().toLowerCase() === name.toLowerCase());
 
     const name = data[hIdx('Nombre_APP')] || data[hIdx('Nombre_De_La_Rifa')] || 'Rifas';
-    const phone = data[hIdx('Telefonos')] || '';
+    const phoneRaw = data[hIdx('Telefonos')] || '';
     const address = data[hIdx('Direccion')] || '';
     const logo = data[hIdx('Logo')] || '';
 
     document.getElementById('houseName').textContent = String(name || '').trim();
-    document.getElementById('phone').textContent = phone ? ('Tel: ' + phone) : '';
+    document.getElementById('phone').textContent = phoneRaw ? ('Tel: ' + phoneRaw) : '';
     document.getElementById('address').textContent = address ? ('Dir: ' + address) : '';
     document.getElementById('logoImg').src = String(logo || '').trim();
-    window.__CONFIG_PHONE = phone || '';
+
+    // Guarda ambos: original para mostrar y dígitos normalizados para WhatsApp
+    window.__CONFIG_PHONE = phoneRaw || '';
+    window.__CONFIG_PHONE_DIGITS = extractColombiaDigits(phoneRaw) || '573206413635';
   }catch(e){ console.warn('Config error', e); }
 }
 
@@ -458,11 +480,8 @@ function loadDailyFromCache(){
   return false;
 }
 function pickDaily(force=false){
-  // Si no hay force e intentamos desde cache
   if (!force && loadDailyFromCache()) return;
-
   const libres = Object.keys(ALL || {}).filter(k => ALL[k] === 'libre');
-  // Fisher–Yates con aleatoriedad fuerte
   for (let i=libres.length-1;i>0;i--){
     const j = randInt(i+1);
     [libres[i],libres[j]] = [libres[j],libres[i]];
@@ -477,32 +496,24 @@ async function syncMap(){
     const txt = await fetchCsvAny(GID_RAFFLES);
     const rows = parseCSV(txt);
     if(rows.length < 2){ console.warn('No hay filas'); return; }
-
-    // Base ocupado
     const map = makeBaseMap();
-
-    // Solo A/B: A = número, B = estado (Asignado/Libre)
     for (let i=1;i<rows.length;i++){
       const r = rows[i] || [];
       const a = (r[0] ?? '').toString().trim(); // Col A
       const b = (r[1] ?? '').toString().trim(); // Col B
       if (!a) continue;
-
       let digits = a.replace(/\D/g,'');
       if (!digits) continue;
       if (digits.length > 4) digits = digits.slice(0,4);
       const num = digits.padStart(4,'0');
-
-      map[num] = normStatusAB(b); // Libre/Asignado -> libre/ocupado
+      map[num] = normStatusAB(b);
     }
-
     ALL = map;
 
-    // Mantener DAILY estable: solo quitar los que se hayan ocupado
+    // Mantener DAILY estable: solo quitar los que se ocupen
     const before = DAILY.length;
     DAILY = (DAILY || []).filter(n => ALL[n] === 'libre');
     if (DAILY.length !== before) persistDaily();
-
   }catch(e){ console.warn('syncMap error', e); }
 }
 
@@ -510,8 +521,7 @@ async function syncMap(){
 async function rerenderSearch(){
   const layer = document.getElementById('searchResult');
 
-  // 🔽 Oculta cualquier mensaje previo al empezar una nueva búsqueda
-  hideMsg();
+  hideMsg(); // limpia cartel previo
 
   const raw = (SEARCH_INPUT.value || '').replace(/\D/g,'').slice(0,4);
   if (SEARCH_INPUT.value !== raw) SEARCH_INPUT.value = raw;
@@ -530,11 +540,10 @@ async function rerenderSearch(){
     if (!ALL || !Object.keys(ALL).length){ msg('Sin conexión o datos.', true); return; }
   }
 
-  const padded = pad4(raw); // 7 -> 0007
+  const padded = pad4(raw);
   const st = ALL[padded] || 'ocupado';
 
   if (st === 'libre'){
-    // 🔽 Asegura que el cartel “ocupada” desaparezca YA
     hideMsg();
     renderSearchOne(padded);
   }else{
@@ -586,7 +595,7 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     }
   });
 
-  // Botón ALEATORIO: libre global si existe; si no, cualquiera 0000–9999
+  // Botón ALEATORIO
   document.getElementById('randomButton').addEventListener('click', async function() {
     const loading = document.getElementById('loadingMessage');
     const layer = document.getElementById('searchResult');
@@ -594,7 +603,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     loading.style.display = 'block';
     layer.style.display = 'none';
     layer.innerHTML = '';
-    // 🔽 Usa el helper para limpiar mensajes previos
     hideMsg();
 
     if (!ALL || !Object.keys(ALL).length){ await syncMap(); }
@@ -613,7 +621,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 
     const st = ALL[chosen] || 'ocupado';
     if (st === 'libre'){
-      // 🔽 Asegura que el cartel no se vea si justo estaba activo
       hideMsg();
       renderSearchOne(chosen);
     }else{
@@ -648,18 +655,17 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     const nowKey = todayKey();
     if (nowKey !== DAY_MARK){
       DAY_MARK = nowKey;
-      await syncMap();       // refresca estados
-      DAILY = [];            // invalida diario viejo
-      pickDaily(true);       // NUEVO sorteo del día
+      await syncMap();
+      DAILY = [];
+      pickDaily(true);
       renderGrid();
       return;
     }
-
     // 2) mismo día: solo actualizar estados y encoger DAILY si se ocuparon
     const before = DAILY.length;
     await syncMap();
     if (DAILY.length !== before){
-      renderGrid();          // muestra menos si algunos se ocuparon
+      renderGrid();
     }
   }, 5000);
 });
